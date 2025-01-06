@@ -33,15 +33,15 @@ def ReadData_fromfile(dataset):
     if dataset == "uniprot":
         datafile = ["train_seq_list", "query_seq_list", "base_seq_list"]
         for d in datafile:
-            lines.extend(pickle.load(open("../data/uniprot/{}".format(d), "rb")))
+            lines.extend(pickle.load(open("data/uniprot/{}".format(d), "rb")))
     elif dataset == "uniref":
         datafile = ["train_seq_list", "query_seq_list", "base_seq_list"]
         for d in datafile:
-            lines.extend(pickle.load(open("../data/uniref/{}".format(d), "rb")))
+            lines.extend(pickle.load(open("data/uniref/{}".format(d), "rb")))
     elif dataset == "geolife":
-        lines.extend(pickle.load(open("../data/0_geolife/traj_list", "rb")))
+        lines.extend(pickle.load(open("data/0_geolife/traj_list", "rb")))
     elif dataset == "porto":
-        lines.extend(pickle.load(open("../data/0_porto_all/traj_list", "rb")))
+        lines.extend(pickle.load(open("data/0_porto_all/traj_list", "rb")))
     else:
         raise ValueError("wrong dataset type!!!")
     return lines
