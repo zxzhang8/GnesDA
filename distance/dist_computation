@@ -5,15 +5,20 @@ from tqdm import tqdm
 from functools import partial
 from multiprocessing import Pool
 
-
 from distance.dtw import dtw_dis
 from distance.edr import edr_dis
-
+import distance.pairwise_alignment as pa
 
 def f(x, dist_type):
     a, B = x
-    if dist_type == "ed" or dist_type == "nw":
+    if dist_type == "ed":
         return [Levenshtein.distance(a, b) for b in B]
+    if dist_type == "nw":
+        tmp = []
+        for b in B:
+            aln = pa.needle(moltype="prot", qseq=a, sseq=b, gapextend=0)
+            tmp.append(aln.pidentity)
+        return tmp
     elif dist_type == "dtw":
         return [dtw_dis(a, b) for b in B]
     elif dist_type == "edr":
