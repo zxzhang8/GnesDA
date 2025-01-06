@@ -185,7 +185,7 @@ def get_args():
 
     # GnesDA
     parser.add_argument('--conv_channels',       type=int, default=10, help='num of conv channels in pretreatment')
-    parser.add_argument('--conv_layers',         type=int, default=3, help='num of conv layers in pretreatment')
+    parser.add_argument('--conv_layers',         type=int, default=5, help='num of conv layers in pretreatment')
     parser.add_argument('--e_layers',            type=int, default=6, help='num of encoder layers')
     parser.add_argument('--d_model',             type=int, default=64, help='dimension of transformer model')
     parser.add_argument('--n_heads',             type=int, default=1, help='num of heads')
