@@ -9,7 +9,8 @@ from multiprocessing import cpu_count
 from utils import grid
 from utils.function import setup_seed
 from train.embed import GnesDA_embedding
-from dataset.datasets import word2sig, StringDataset, all_pair_distance
+from dataset.datasets import word2sig, StringDataset
+from distance.dist_computation import all_pair_distance
 
 
 def get_knn(dist):
