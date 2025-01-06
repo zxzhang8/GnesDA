@@ -1,0 +1,45 @@
+import time
+import Levenshtein
+import numpy as np
+from tqdm import tqdm
+from functools import partial
+from multiprocessing import Pool
+
+
+from distance.dtw import dtw_dis
+from distance.edr import edr_dis
+
+
+def f(x, dist_type):
+    a, B = x
+    if dist_type == "ed" or dist_type == "nw":
+        return [Levenshtein.distance(a, b) for b in B]
+    elif dist_type == "dtw":
+        return [dtw_dis(a, b) for b in B]
+    elif dist_type == "edr":
+        return [edr_dis(a, b) for b in B]
+    else:
+        raise ValueError("wrong dist type!!!")
+
+
+def all_pair_distance(A, B, n_thread, dist_type, progress=True):
+    bar = tqdm if progress else lambda iterable, total, desc: iterable
+    g = partial(f, dist_type=dist_type)
+
+    def all_pair(A, B, n_thread):
+        with Pool(n_thread) as pool:
+            start_time = time.time()
+            edit = list(
+                bar(
+                    pool.imap(g, zip(A, [B for _ in A])),
+                    total=len(A),
+                    desc="# edit distance {}x{}".format(len(A), len(B)),
+                ))
+            if progress:
+                print("# Calculate edit distance time: {}".format(time.time() - start_time))
+            return np.array(edit)
+
+    if len(A) < len(B):
+        return all_pair(B, A, n_thread).T
+    else:
+        return all_pair(A, B, n_thread)
