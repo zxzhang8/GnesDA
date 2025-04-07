@@ -11,8 +11,7 @@ from model.pretreatment import Pretreatment
 from model.GnesDA_layers import positional_encoding, Transpose, get_activation_fn
 
 
-# Cell
-class PatchTST_backbone(nn.Module):
+class GnesDA_backbone(nn.Module):
     def __init__(self, c_in, seq_len, embed_len, patch_len=16, stride=8,
                  n_layers=6, d_model=64, n_heads=1, d_k=None, d_v=None, d_ff=256, norm=None, attn_dropout=0.,
                  dropout=0., act="gelu", is_mask=False, store_attn=False, pret_type="conv", conv_layers=6,
@@ -49,12 +48,12 @@ class PatchTST_backbone(nn.Module):
             self.patch_len = c_in
 
         # Backbone
-        self.backbone = TSTiEncoder(self.c_in, patch_num=self.patch_num, patch_len=self.patch_len, n_layers=n_layers,
+        self.backbone = GnesDAiEncoder(self.c_in, patch_num=self.patch_num, patch_len=self.patch_len, n_layers=n_layers,
                                     d_model=d_model, n_heads=n_heads, d_k=d_k, d_v=d_v, d_ff=d_ff, norm=norm,
                                     attn_dropout=attn_dropout, dropout=dropout, act=act, store_attn=store_attn,
                                     pe=pe, learn_pe=learn_pe)
 
-        # Flatten
+        # MLP
         self.flat_size = d_model * self.patch_num
         self.flatten = nn.Flatten(start_dim=-2)
         self.MLP = nn.Sequential(
@@ -116,7 +115,7 @@ def get_attn_mask(max_len, lens):
     return attn_mask.expand(batch_size, max_len, max_len)
 
 
-class TSTiEncoder(nn.Module):
+class GnesDAiEncoder(nn.Module):
     def __init__(self, c_in, patch_num, patch_len, n_layers=6, d_model=64, n_heads=1, d_k=None, d_v=None, d_ff=256,
                  norm=None, attn_dropout=0., dropout=0., act="gelu", store_attn=False, pe='sincos', learn_pe=True):
         super().__init__()
@@ -135,7 +134,7 @@ class TSTiEncoder(nn.Module):
         self.dropout = nn.Dropout(dropout)
 
         # Encoder
-        self.encoder = TSTEncoder(d_model, n_heads, d_k=d_k, d_v=d_v, d_ff=d_ff, norm=norm, attn_dropout=attn_dropout,
+        self.encoder = GnesDAEncoder(d_model, n_heads, d_k=d_k, d_v=d_v, d_ff=d_ff, norm=norm, attn_dropout=attn_dropout,
                                   dropout=dropout, activation=act, n_layers=n_layers, store_attn=store_attn)
 
     def forward(self, x, attn_mask=None):  # x: [bs*nvars x patch_num x patch_len]
@@ -149,29 +148,27 @@ class TSTiEncoder(nn.Module):
 
 
 # Cell
-class TSTEncoder(nn.Module):
+class GnesDAEncoder(nn.Module):
     def __init__(self, d_model, n_heads, d_k=None, d_v=None, d_ff=None, norm=None, attn_dropout=0., dropout=0.,
                  activation='gelu', n_layers=6, store_attn=False):
         super().__init__()
 
         self.attn_layers = nn.ModuleList(
-            [TSTEncoderLayer(d_model, n_heads=n_heads, d_k=d_k, d_v=d_v, d_ff=d_ff, norm=norm, attn_dropout=attn_dropout,
+            [GnesDAEncoderLayer(d_model, n_heads=n_heads, d_k=d_k, d_v=d_v, d_ff=d_ff, norm=norm, attn_dropout=attn_dropout,
                              dropout=dropout, activation=activation, store_attn=store_attn) for i in range(n_layers)
              ]
             )
 
     def forward(self, src, attn_mask=None):
         output = src
-        enc_attns = []
 
         for attn_layer in self.attn_layers:
-            output, attn = attn_layer(output, attn_mask=attn_mask)
-            enc_attns.append(attn)
+            output = attn_layer(output, attn_mask=attn_mask)
 
         return output
 
 
-class TSTEncoderLayer(nn.Module):
+class GnesDAEncoderLayer(nn.Module):
     def __init__(self, d_model, n_heads, d_k=None, d_v=None, d_ff=256, store_attn=False,
                  norm=None, attn_dropout=0., dropout=0., bias=True, activation="gelu"):
         super().__init__()
@@ -190,7 +187,7 @@ class TSTEncoderLayer(nn.Module):
             else:
                 self.norm_attn = nn.LayerNorm(d_model)
 
-        # Position-wise Feed-Forward
+        # Feed-Forward
         self.ff = nn.Sequential(nn.Linear(d_model, d_ff, bias=bias),
                                 get_activation_fn(activation),
                                 nn.Dropout(dropout),
@@ -205,20 +202,17 @@ class TSTEncoderLayer(nn.Module):
                 self.norm_ffn = nn.LayerNorm(d_model)
 
         self.norm = norm
-        self.store_attn = store_attn
 
     def forward(self, src, attn_mask=None):
         # Attention
-        src2, attn, scores = self.self_attn(src, src, src, attn_mask=attn_mask)
-        if self.store_attn:
-            self.attn = attn
+        src2 = self.self_attn(src, src, src, attn_mask=attn_mask)
 
         # Add & Norm
         src = src + self.dropout_attn(src2)
         if self.norm is not None:
             src = self.norm_attn(src)
 
-        # Position-wise Feed-Forward
+        # Feed-Forward
         src2 = self.ff(src)
 
         # Add & Norm
@@ -226,7 +220,7 @@ class TSTEncoderLayer(nn.Module):
         if self.norm is not None:
             src = self.norm_ffn(src)
 
-        return src, scores
+        return src
 
 
 class _MultiheadAttention(nn.Module):
@@ -260,12 +254,12 @@ class _MultiheadAttention(nn.Module):
         v_s = self.W_V(V).view(bs, -1, self.n_heads, self.d_v).transpose(1, 2)      # v_s: [bs x n_heads x q_len x d_v]
 
         # Apply Scaled Dot-Product Attention
-        output, attn_weights, attn_scores = self.sdp_attn(q_s, k_s, v_s, attn_mask=attn_mask)
+        output = self.sdp_attn(q_s, k_s, v_s, attn_mask=attn_mask)
 
         output = output.transpose(1, 2).contiguous().view(bs, -1, self.n_heads * self.d_v)  # output: [bs x q_len x n_heads * d_v]
         output = self.to_out(output)
 
-        return output, attn_weights, attn_scores
+        return output
 
 
 class _ScaledDotProductAttention(nn.Module):
@@ -296,25 +290,22 @@ class _ScaledDotProductAttention(nn.Module):
 
         output = torch.matmul(attn_weights, v)  # output: [bs x n_heads x max_q_len x d_v]
 
-        return output, attn_weights, attn_scores
+        return output
 
 def visualize(attn_scores, batch_num):
     non_zero_cols = np.any(attn_scores != 0, axis=0)
     attn_scores = attn_scores[non_zero_cols][:, non_zero_cols]
-    # 创建热力图
+
     plt.figure(figsize=(10, 8))
     sns.heatmap(attn_scores, annot=True, fmt=".1f", cmap='viridis')
 
-    # 设置标题和标签
     plt.title("Attention Scores Heatmap")
     plt.xlabel("Column Index")
     plt.ylabel("Row Index")
     plt.savefig("heatmap.png")
-    # 保存图片到指定的文件夹
-    # 构建带有批次编号的文件名
+    
     output_path = os.path.join("heatmaps", f"heatmap_batch_{batch_num}.png")
     plt.savefig(output_path)
 
-    # 关闭绘图窗口，防止内存泄漏
     plt.close()
 
