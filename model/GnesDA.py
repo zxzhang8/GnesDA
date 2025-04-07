@@ -1,6 +1,6 @@
 from torch import nn
 
-from model.GnesDA_backbone import PatchTST_backbone
+from model.GnesDA_backbone import GnesDA_backbone
 
 
 class GnesDAModel(nn.Module):
@@ -28,7 +28,7 @@ class GnesDAModel(nn.Module):
         subtract_last = configs.subtract_last
 
         # model
-        self.model = PatchTST_backbone(c_in=channels, seq_len=max_seq_len, embed_len=embed_len,
+        self.model = GnesDA_backbone(c_in=channels, seq_len=max_seq_len, embed_len=embed_len,
                                        patch_len=patch_len, stride=stride,
                                        n_layers=n_layers, d_model=d_model,
                                        n_heads=n_heads, d_k=d_k, d_v=d_v, d_ff=d_ff, norm=norm,
