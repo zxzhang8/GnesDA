@@ -52,20 +52,6 @@ class TripletLoss(nn.Module):
                    (neg_embed_dist - neg_dist) ** 2 + \
                    (pos_neg_embed_dist - pos_neg_dist) ** 2
 
-        if epoch == -1:
-            print("pos_embed_dist:{}".format(pos_embed_dist))
-            print("neg_embed_dist:{}".format(neg_embed_dist))
-            print("pos_neg_embed_dist:{}".format(pos_neg_embed_dist))
-            print("pos_dist:{}".format(pos_dist))
-            print("neg_dist:{}".format(neg_dist))
-            print("pos_neg_dist:{}".format(pos_neg_dist))
-            print("rank_loss:{}".format(rank_loss))
-            print("mse_loss:{}".format(mse_loss))
-            for i in range(32):
-                print(anchor[i])
-                print(positive[i])
-                print(negative[i])
-
         return torch.mean(self.l * rank_loss), \
             torch.mean(self.r * torch.sqrt(mse_loss)), \
             torch.mean(self.l * rank_loss + self.r * torch.sqrt(mse_loss))
