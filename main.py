@@ -50,15 +50,15 @@ def ReadData_fromfile(dataset):
 
 class DataHandler:
     def __init__(self, args, data_f):
-        self.data_f = data_f
-        self.args = args
-        self.nt = args.nt
-        self.nq = args.nq
-        self.maxl = args.maxl
-        self.dataset = args.dataset
+        self.data_f    = data_f
+        self.args      = args
+        self.nt        = args.nt
+        self.nq        = args.nq
+        self.maxl      = args.maxl
+        self.dataset   = args.dataset
         self.data_type = args.data_type
 
-        self.lines = ReadData_fromfile(args.dataset)
+        self.lines     = ReadData_fromfile(args.dataset)
 
         if self.maxl != 0:
             self.lines = [l[: self.maxl] for l in self.lines]
@@ -157,7 +157,7 @@ class DataHandler:
 def get_args():
     parser = argparse.ArgumentParser(description="HyperParameters for String Embedding")
 
-    parser.add_argument("--data_type",           type=str, default="protein", help="the type of data")
+    parser.add_argument("--data_type",           type=str, default="protein", help="the type of data:protein or trajtory")
     parser.add_argument("--dataset",             type=str, default="uniprot", help="dataset")
     parser.add_argument("--embed-dir",           type=str, default="", help="embedding save location")
     parser.add_argument("--embed",               type=str, default="transformer", help="embedding method")
