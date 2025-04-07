@@ -14,14 +14,14 @@ def train_epoch(args, train_set, device):
     torch.manual_seed(time.time())
 
     train_loader = torch.utils.data.DataLoader(train_set, batch_size=args.batch_size, shuffle=True, num_workers=10)
-    train_steps = len(train_loader)
+    train_steps  = len(train_loader)
 
     if args.embed == "transformer":
         net = GnesDAModel(args, channels=C, max_seq_len=M, embed_len=args.embed_len).to(device)
     else:
         raise ValueError("wrong embed type!!!")
 
-    model = TripletNet(net, device=device).to(device)
+    model  = TripletNet(net, device=device).to(device)
     losser = TripletLoss(args).to(device)
     model.train()
 
@@ -34,7 +34,7 @@ def train_epoch(args, train_set, device):
 
     with tqdm(total=args.epochs * len(train_loader), desc="# training") as p_bar:
         for epoch in range(args.epochs):
-            agg = 0.0
+            agg   = 0.0
             agg_r = 0
             agg_m = 0
             optimizer.zero_grad()
@@ -59,7 +59,7 @@ def train_epoch(args, train_set, device):
                 optimizer.step()
                 # scheduler.step()
 
-                agg += loss.item()
+                agg   += loss.item()
                 agg_r += r.item()
                 agg_m += m.item()
                 p_bar.update(1)
