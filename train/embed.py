@@ -1,11 +1,12 @@
 import os
+import json
 import time
 import tqdm
 import torch
 import numpy as np
 from torch.utils import data
 
-from utils.function import test_recall
+from utils.function import test_recall, test_distance_correlation
 from train.trainer import train_epoch
 from dataset.datasets import TripletString, StringDataset
 
@@ -17,7 +18,12 @@ def _batch_embed(args, net, vecs: StringDataset, device):
         protein / traj 均为 [N, C, T]
         其中 C 是统一后的通道数，T = embed_len // C
     """
-    test_loader = torch.utils.data.DataLoader(vecs, batch_size=args.test_batch_size, shuffle=False, num_workers=10)
+    test_loader = torch.utils.data.DataLoader(
+        vecs,
+        batch_size=args.test_batch_size,
+        shuffle=False,
+        num_workers=args.num_workers,
+    )
     net.eval()
     embedding = []
     with tqdm.tqdm(total=len(test_loader), desc="# batch embedding") as p_bar:
@@ -39,7 +45,7 @@ def GnesDA_embedding(args, h, data_file):
 
     model_file = "{}/model.torch".format(data_file)
     if os.path.isfile(model_file):
-        model = torch.load(model_file)
+        model = torch.load(model_file, weights_only=False)
     else:
         start_time = time.time()
         model = train_epoch(args, train_loader, device)
@@ -66,3 +72,18 @@ def GnesDA_embedding(args, h, data_file):
 
     if args.recall:
         test_recall(xb, xq, h.query_knn, h.query_dist, h.C)
+    if args.distance_correlation:
+        metrics = test_distance_correlation(xb, xq, h.query_dist, h.C)
+        if args.save_embed:
+            np.save("{}/{}embedding_query_base_distance".format(data_file, args.embed_dir), metrics["pred_dist"])
+            with open("{}/{}distance_metrics.json".format(data_file, args.embed_dir), "w", encoding="utf-8") as handle:
+                json.dump(
+                    {
+                        "pearson": metrics["pearson"],
+                        "spearman": metrics["spearman"],
+                        "mae": metrics["mae"],
+                        "rmse": metrics["rmse"],
+                    },
+                    handle,
+                    indent=2,
+                )

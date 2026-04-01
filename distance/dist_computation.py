@@ -1,5 +1,4 @@
 import time
-import Levenshtein
 import numpy as np
 from tqdm import tqdm
 from functools import partial
@@ -9,12 +8,38 @@ from distance.dtw import dtw_dis
 from distance.edr import edr_dis
 import distance.pairwise_alignment as pa
 
+try:
+    import Levenshtein
+except ImportError:
+    Levenshtein = None
+
+
+def _edit_distance(a, b):
+    if Levenshtein is not None:
+        return Levenshtein.distance(a, b)
+
+    if len(a) < len(b):
+        a, b = b, a
+
+    prev = list(range(len(b) + 1))
+    for i, ca in enumerate(a, start=1):
+        curr = [i]
+        for j, cb in enumerate(b, start=1):
+            cost = 0 if ca == cb else 1
+            curr.append(min(
+                prev[j] + 1,
+                curr[j - 1] + 1,
+                prev[j - 1] + cost,
+            ))
+        prev = curr
+    return prev[-1]
+
 
 def f(x, dist_type, data_type):
     """计算单个查询序列到一组候选序列的真实距离。"""
     a, B = x
     if dist_type == "ed":
-        return [Levenshtein.distance(a, b) for b in B]
+        return [_edit_distance(a, b) for b in B]
     if dist_type == "nw":
         moltype = "nucl" if data_type == "dna" else "prot"
         tmp = []

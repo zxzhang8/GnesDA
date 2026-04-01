@@ -29,3 +29,42 @@ Example:
 python main.py --data_type dna --dataset dna --dist_type ed
 python main.py --data_type dna --dataset dna --dist_type nw
 ```
+
+## Alpha satellite monomer workflow
+This repository can be adapted to alpha satellite monomer embeddings if you train on monomer edit-distance supervision.
+
+Expected behavior:
+
+- `--dist_type ed` fits embedding distances to Levenshtein edit distance.
+- DNA FASTA input must contain only uppercase `A`, `C`, `G`, `T`.
+- Correlation metrics between embedding distance and true edit distance are printed during evaluation.
+- Default DNA settings are tuned toward monomer-scale sequences, with `conv_layers=3`.
+
+If you already have monomer FASTA files such as `inputs/monomers_train_all.fa` and `inputs/monomers_eval_all.fa`, run:
+
+```bash
+python main.py \
+  --data_type dna \
+  --dataset monomer \
+  --dist_type ed \
+  --train-fasta inputs/monomers_train_all.fa \
+  --eval-fasta inputs/monomers_eval_all.fa \
+  --save-model \
+  --save-embed
+```
+
+This command will:
+
+- create `data/monomer/train_seq_list`, `query_seq_list`, and `base_seq_list`
+- split the eval FASTA into query/base using `--shuffle-seed` and `--eval-query-ratio`
+- train a GnesDA model against edit distance
+- save embeddings plus `distance_metrics.json`
+
+To embed a separate FASTA with a trained model:
+
+```bash
+python infer_fasta_embeddings.py \
+  --dataset monomer \
+  --dist-type ed \
+  --input-fasta inputs/monomers_eval_all.fa
+```

@@ -8,6 +8,7 @@ from multiprocessing import cpu_count
 
 from utils import grid
 from utils.function import setup_seed
+from utils.fasta import prepare_dna_dataset
 from train.embed import GnesDA_embedding
 from dataset.datasets import word2sig, StringDataset
 from distance.dist_computation import all_pair_distance
@@ -229,6 +230,7 @@ def get_args():
     parser.add_argument("--shuffle-seed",        type=int, default=666, help="seed for shuffle")
     parser.add_argument("--batch-size",          type=int, default=32, help="batch size for train")
     parser.add_argument("--test-batch-size",     type=int, default=32, help="batch size for test")
+    parser.add_argument("--num-workers",         type=int, default=0, help="dataloader workers for train/test")
     parser.add_argument("--channel",             type=int, default=8, help="channels of cnn")
     parser.add_argument("--embed-len",           type=int, default=128, help="output length")
     parser.add_argument("--embed-channel",       type=int, default=32, help="output channel of trajectory dataset")
@@ -238,11 +240,18 @@ def get_args():
     parser.add_argument("--save-split",          action="store_true", default=False, help="save split data folder")
     parser.add_argument("--save-embed",          action="store_true", default=False, help="save embedding")
     parser.add_argument("--recall",              action="store_true", default=True, help="print recall")
+    parser.add_argument("--distance-correlation", action="store_true", default=True, help="print embedding/edit-distance correlation")
     parser.add_argument("--no-cuda",             action="store_true", default=False, help="disables GPU training")
+
+    parser.add_argument("--train-fasta",         type=str, default="", help="optional training FASTA for DNA")
+    parser.add_argument("--eval-fasta",          type=str, default="", help="optional eval FASTA for DNA; split into query/base")
+    parser.add_argument("--query-fasta",         type=str, default="", help="optional query FASTA for DNA")
+    parser.add_argument("--base-fasta",          type=str, default="", help="optional base FASTA for DNA")
+    parser.add_argument("--eval-query-ratio",    type=float, default=0.5, help="fraction of eval FASTA assigned to query")
 
     # GnesDA
     parser.add_argument('--conv_channels',       type=int, default=10, help='num of conv channels in pretreatment')
-    parser.add_argument('--conv_layers',         type=int, default=5, help='num of conv layers in pretreatment')
+    parser.add_argument('--conv_layers',         type=int, default=3, help='num of conv layers in pretreatment')
     parser.add_argument('--e_layers',            type=int, default=6, help='num of encoder layers')
     parser.add_argument('--d_model',             type=int, default=64, help='dimension of transformer model')
     parser.add_argument('--n_heads',             type=int, default=1, help='num of heads')
@@ -259,6 +268,28 @@ def get_args():
     args = parser.parse_args()
     if args.data_type == "dna" and args.dist_type not in ("ed", "nw"):
         raise ValueError("DNA only supports 'ed' and 'nw' distance types.")
+
+    if args.data_type == "dna":
+        metadata = prepare_dna_dataset(
+            dataset=args.dataset,
+            train_fasta=args.train_fasta or None,
+            eval_fasta=args.eval_fasta or None,
+            query_fasta=args.query_fasta or None,
+            base_fasta=args.base_fasta or None,
+            seed=args.shuffle_seed,
+            eval_query_ratio=args.eval_query_ratio,
+        )
+        if metadata is not None:
+            args.nt = metadata["train_size"]
+            args.nq = metadata["query_size"]
+            args.nb = min(args.nb, metadata["base_size"])
+            print(
+                "# Prepared DNA dataset from FASTA\n"
+                f"# train_size:{metadata['train_size']}\n"
+                f"# query_size:{metadata['query_size']}\n"
+                f"# base_size:{metadata['base_size']}\n"
+                f"# max_sequence_length:{metadata['max_sequence_length']}"
+            )
 
     print(f"d_model:{args.d_model}")
     print(f"e_layers:{args.e_layers}")

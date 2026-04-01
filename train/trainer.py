@@ -20,7 +20,12 @@ def train_epoch(args, train_set, device):
     #       traj:    [B, M, 2]
     #   三个真实距离:
     #       [B]
-    train_loader = torch.utils.data.DataLoader(train_set, batch_size=args.batch_size, shuffle=True, num_workers=10)
+    train_loader = torch.utils.data.DataLoader(
+        train_set,
+        batch_size=args.batch_size,
+        shuffle=True,
+        num_workers=args.num_workers,
+    )
     train_steps  = len(train_loader)
 
     if args.embed == "transformer":

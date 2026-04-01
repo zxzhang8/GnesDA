@@ -55,6 +55,59 @@ def arg_sort(q, x, embed_channel):
     return np.argsort(dists)
 
 
+def embedding_distance(q, x, embed_channel):
+    """返回 embedding 空间中的两组距离矩阵。"""
+    if len(q.shape) == 2:
+        return l2_dist(q, x)
+    return l2_dist_separate(q, x, embed_channel)
+
+
+def _average_rank(values):
+    order = np.argsort(values, kind="mergesort")
+    sorted_values = values[order]
+    ranks = np.empty(len(values), dtype=np.float64)
+
+    start = 0
+    while start < len(values):
+        end = start + 1
+        while end < len(values) and sorted_values[end] == sorted_values[start]:
+            end += 1
+        avg_rank = (start + end - 1) / 2.0 + 1.0
+        ranks[order[start:end]] = avg_rank
+        start = end
+    return ranks
+
+
+def _pearson_corr(x, y):
+    x_centered = x - np.mean(x)
+    y_centered = y - np.mean(y)
+    denom = np.sqrt(np.sum(x_centered ** 2) * np.sum(y_centered ** 2))
+    if denom == 0:
+        return float("nan")
+    return float(np.sum(x_centered * y_centered) / denom)
+
+
+def distance_correlation_metrics(X, Q, G, embed_channel):
+    pred = embedding_distance(Q, X, embed_channel)
+    truth = G.astype(np.float64)
+
+    pred_flat = pred.reshape(-1)
+    truth_flat = truth.reshape(-1)
+
+    pearson = _pearson_corr(pred_flat, truth_flat)
+    spearman = _pearson_corr(_average_rank(pred_flat), _average_rank(truth_flat))
+    mae = float(np.mean(np.abs(pred_flat - truth_flat)))
+    rmse = float(np.sqrt(np.mean((pred_flat - truth_flat) ** 2)))
+
+    return {
+        "pearson": pearson,
+        "spearman": spearman,
+        "mae": mae,
+        "rmse": rmse,
+        "pred_dist": pred,
+    }
+
+
 def intersect_sizes(gs, ids):
     """统计预测结果与真值 top-k 的交集大小。"""
     return np.array([len(np.intersect1d(g, list(id))) for g, id in zip(gs, ids)])
@@ -122,6 +175,16 @@ def test_recall(X, Q, knn, G, embed_channel):
     #     for rc in rcs:
     #         print("%.4f \t" % rc, end="")
     # print()
+
+
+def test_distance_correlation(X, Q, G, embed_channel):
+    metrics = distance_correlation_metrics(X, Q, G, embed_channel)
+    print("# Distance Correlation")
+    print("pearson\t{:.6f}".format(metrics["pearson"]))
+    print("spearman\t{:.6f}".format(metrics["spearman"]))
+    print("mae\t{:.6f}".format(metrics["mae"]))
+    print("rmse\t{:.6f}".format(metrics["rmse"]))
+    return metrics
 
 
 def setup_seed(seed):
