@@ -2,6 +2,7 @@ import os
 import time
 import tqdm
 import pickle
+import json
 import argparse
 import shutil
 import numpy as np
@@ -13,6 +14,7 @@ from utils.fasta import prepare_dna_dataset
 from train.embed import GnesDA_embedding
 from dataset.datasets import word2sig, StringDataset
 from distance.dist_computation import all_pair_distance
+from utils.sequence_store import CombinedSequenceStore, open_split_store
 
 
 def get_knn(dist):
@@ -40,6 +42,37 @@ def get_dist_knn(dist_type, queries, base=None, data_type=None):
     return dist, get_knn(dist)
 
 
+def load_dataset_metadata(dataset):
+    metadata_path = os.path.join("data", dataset, "metadata.json")
+    if not os.path.isfile(metadata_path):
+        return None
+    with open(metadata_path, "r", encoding="utf-8") as handle:
+        return json.load(handle)
+
+
+def get_dataset_item_count(dataset, data_type):
+    metadata = load_dataset_metadata(dataset)
+    if metadata is not None and metadata.get("storage_format") == "seqbin_v1":
+        return metadata["train_size"] + metadata["query_size"] + metadata["base_size"]
+    return len(ReadData_fromfile(dataset, data_type))
+
+
+def load_sequence_store(dataset, max_length=0):
+    dataset_dir = os.path.join("data", dataset)
+    stores = {
+        "train": open_split_store(dataset_dir, "train"),
+        "query": open_split_store(dataset_dir, "query"),
+        "base": open_split_store(dataset_dir, "base"),
+    }
+    return CombinedSequenceStore(stores, split_order=["train", "query", "base"], max_length=max_length)
+
+
+def iter_store_chunks(store, indices, chunk_size):
+    for start in range(0, len(indices), chunk_size):
+        chunk_indices = indices[start:start + chunk_size]
+        yield start, list(store.iter_indices(chunk_indices))
+
+
 def ReadData_fromfile(dataset, data_type):
     """按数据集名称读取原始序列列表。
 
@@ -50,9 +83,17 @@ def ReadData_fromfile(dataset, data_type):
     lines = []
     if data_type in ("protein", "dna"):
         if dataset in ("uniprot", "uniref") or os.path.isdir("data/{}".format(dataset)):
-            datafile = ["train_seq_list", "query_seq_list", "base_seq_list"]
-            for d in datafile:
-                lines.extend(pickle.load(open("data/{}/{}".format(dataset, d), "rb")))
+            metadata = load_dataset_metadata(dataset)
+            if data_type == "dna" and metadata is not None and metadata.get("storage_format") == "seqbin_v1":
+                store = load_sequence_store(dataset)
+                try:
+                    lines.extend(store.iter_indices(range(len(store))))
+                finally:
+                    store.close()
+            else:
+                datafile = ["train_seq_list", "query_seq_list", "base_seq_list"]
+                for d in datafile:
+                    lines.extend(pickle.load(open("data/{}/{}".format(dataset, d), "rb")))
         else:
             raise ValueError("wrong dataset type!!!")
     elif dataset == "geolife":
@@ -109,13 +150,18 @@ class DataHandler:
         self.maxl      = args.maxl
         self.dataset   = args.dataset
         self.data_type = args.data_type
+        self.metadata  = load_dataset_metadata(args.dataset)
+        self.sequence_store = None
 
-        self.lines     = ReadData_fromfile(args.dataset, args.data_type)
-
-        # 若指定 maxl，则直接截断原始序列长度；0 表示不截断。
-        if self.maxl != 0:
-            self.lines = [l[: self.maxl] for l in self.lines]
-        self.ni = len(self.lines)
+        if self.data_type == "dna" and self.metadata is not None and self.metadata.get("storage_format") == "seqbin_v1":
+            self.sequence_store = load_sequence_store(args.dataset, max_length=self.maxl)
+            self.ni = len(self.sequence_store)
+        else:
+            self.lines = ReadData_fromfile(args.dataset, args.data_type)
+            # 若指定 maxl，则直接截断原始序列长度；0 表示不截断。
+            if self.maxl != 0:
+                self.lines = [l[: self.maxl] for l in self.lines]
+            self.ni = len(self.lines)
         if self.nt + self.nq + self.nb > self.ni:
             raise ValueError(
                 "Dataset '{}' contains {} sequences, but nt + nq + nb = {} exceeds it.".format(
@@ -136,18 +182,57 @@ class DataHandler:
             #   M: 数据集中最大序列长度
             allowed_chars = None
             fixed_alphabet = None
-            if self.data_type == "dna":
-                allowed_chars = "ACGT"
-                fixed_alphabet = "ACGT"
-            self.C, self.M, self.char_ids, self.alphabet = word2sig(
-                self.lines,
-                max_length=None,
-                allowed_chars=allowed_chars,
-                fixed_alphabet=fixed_alphabet,
-            )
-            self.string_t = [self.char_ids[i] for i in self.train_ids]
-            self.string_q = [self.char_ids[i] for i in self.query_ids]
-            self.string_b = [self.char_ids[i] for i in self.base_ids]
+            if self.data_type == "dna" and self.sequence_store is not None:
+                self.C = 4
+                self.alphabet = "ACGT"
+                if self.metadata is None:
+                    raise ValueError("DNA seqbin dataset requires metadata.json")
+                self.M = self.metadata["max_sequence_length"]
+                if self.maxl != 0:
+                    self.M = min(self.M, self.maxl)
+                self.xt = StringDataset(
+                    self.C,
+                    self.M,
+                    None,
+                    self.data_type,
+                    sequence_store=self.sequence_store,
+                    sample_indices=self.train_ids,
+                    fixed_alphabet="ACGT",
+                )
+                self.xq = StringDataset(
+                    self.C,
+                    self.M,
+                    None,
+                    self.data_type,
+                    sequence_store=self.sequence_store,
+                    sample_indices=self.query_ids,
+                    fixed_alphabet="ACGT",
+                )
+                self.xb = StringDataset(
+                    self.C,
+                    self.M,
+                    None,
+                    self.data_type,
+                    sequence_store=self.sequence_store,
+                    sample_indices=self.base_ids,
+                    fixed_alphabet="ACGT",
+                )
+            else:
+                if self.data_type == "dna":
+                    allowed_chars = "ACGT"
+                    fixed_alphabet = "ACGT"
+                self.C, self.M, self.char_ids, self.alphabet = word2sig(
+                    self.lines,
+                    max_length=None,
+                    allowed_chars=allowed_chars,
+                    fixed_alphabet=fixed_alphabet,
+                )
+                self.string_t = [self.char_ids[i] for i in self.train_ids]
+                self.string_q = [self.char_ids[i] for i in self.query_ids]
+                self.string_b = [self.char_ids[i] for i in self.base_ids]
+                self.xt = StringDataset(self.C, self.M, self.string_t, self.data_type)
+                self.xq = StringDataset(self.C, self.M, self.string_q, self.data_type)
+                self.xb = StringDataset(self.C, self.M, self.string_b, self.data_type)
         elif self.data_type == "traj":
             # 轨迹/数值序列:
             #   原始输入: 长度可变的二维点序列 [[lon, lat], ...]
@@ -161,11 +246,10 @@ class DataHandler:
             self.string_t = [self.lines[i] for i in self.train_ids]
             self.string_q = [self.lines[i] for i in self.query_ids]
             self.string_b = [self.lines[i] for i in self.base_ids]
+            self.xt = StringDataset(self.C, self.M, self.string_t, self.data_type)
+            self.xq = StringDataset(self.C, self.M, self.string_q, self.data_type)
+            self.xb = StringDataset(self.C, self.M, self.string_b, self.data_type)
         print("# Loading time: {}".format(time.time() - start_time))
-
-        self.xt = StringDataset(self.C, self.M, self.string_t, self.data_type)
-        self.xq = StringDataset(self.C, self.M, self.string_q, self.data_type)
-        self.xb = StringDataset(self.C, self.M, self.string_b, self.data_type)
 
         print(
             "# Unique signature     : {}".format(self.C),
@@ -228,17 +312,88 @@ class DataHandler:
 
     def generate_dist(self):
         """计算训练集内部与查询集到候选库之间的真实距离。"""
-        self.train_dist, self.train_knn = get_dist_knn(
-            self.args.dist_type,
-            [self.lines[i] for i in self.train_ids],
-            data_type=self.data_type,
+        if self.sequence_store is None:
+            self.train_dist, self.train_knn = get_dist_knn(
+                self.args.dist_type,
+                [self.lines[i] for i in self.train_ids],
+                data_type=self.data_type,
+            )
+            self.query_dist, self.query_knn = get_dist_knn(
+                self.args.dist_type,
+                [self.lines[i] for i in self.query_ids],
+                [self.lines[i] for i in self.base_ids],
+                data_type=self.data_type,
+            )
+            return
+
+        train_dist_path = os.path.join(self.data_f, "train_dist.npy")
+        train_knn_path = os.path.join(self.data_f, "train_knn.npy")
+        query_dist_path = os.path.join(self.data_f, "query_dist.npy")
+        query_knn_path = os.path.join(self.data_f, "query_knn.npy")
+        self.train_dist = np.lib.format.open_memmap(train_dist_path, mode="w+", dtype=np.float64, shape=(self.nt, self.nt))
+        self.train_knn = np.lib.format.open_memmap(train_knn_path, mode="w+", dtype=np.int32, shape=(self.nt, self.nt))
+        self.query_dist = np.lib.format.open_memmap(query_dist_path, mode="w+", dtype=np.float64, shape=(self.nq, self.nb))
+        self.query_knn = np.lib.format.open_memmap(query_knn_path, mode="w+", dtype=np.int32, shape=(self.nq, self.nb))
+
+        train_ids = np.asarray(self.train_ids)
+        query_ids = np.asarray(self.query_ids)
+        base_ids = np.asarray(self.base_ids)
+
+        train_chunk = max(1, min(128, self.nt))
+        base_chunk = max(1, min(2048, self.nb if self.nb else 1))
+
+        self._generate_dist_blockwise(
+            target_dist=self.train_dist,
+            target_knn=self.train_knn,
+            query_indices=train_ids,
+            base_indices=train_ids,
+            query_chunk_size=train_chunk,
+            base_chunk_size=max(1, min(2048, self.nt)),
+            desc_prefix="train",
         )
-        self.query_dist, self.query_knn = get_dist_knn(
-            self.args.dist_type,
-            [self.lines[i] for i in self.query_ids],
-            [self.lines[i] for i in self.base_ids],
-            data_type=self.data_type,
+        self._generate_dist_blockwise(
+            target_dist=self.query_dist,
+            target_knn=self.query_knn,
+            query_indices=query_ids,
+            base_indices=base_ids,
+            query_chunk_size=max(1, min(128, self.nq)),
+            base_chunk_size=base_chunk,
+            desc_prefix="query",
         )
+        self.train_dist.flush()
+        self.train_knn.flush()
+        self.query_dist.flush()
+        self.query_knn.flush()
+
+    def _generate_dist_blockwise(
+        self,
+        target_dist,
+        target_knn,
+        query_indices,
+        base_indices,
+        query_chunk_size,
+        base_chunk_size,
+        desc_prefix,
+    ):
+        for query_start, query_chunk in tqdm.tqdm(
+            iter_store_chunks(self.sequence_store, query_indices, query_chunk_size),
+            total=(len(query_indices) + query_chunk_size - 1) // query_chunk_size,
+            desc=f"# {desc_prefix} distance chunks",
+        ):
+            query_stop = query_start + len(query_chunk)
+            for base_start, base_chunk in iter_store_chunks(self.sequence_store, base_indices, base_chunk_size):
+                block = all_pair_distance(
+                    query_chunk,
+                    base_chunk,
+                    cpu_count(),
+                    self.args.dist_type,
+                    data_type=self.data_type,
+                    progress=False,
+                )
+                base_stop = base_start + len(base_chunk)
+                target_dist[query_start:query_stop, base_start:base_stop] = block
+            for row_id in range(query_start, query_stop):
+                target_knn[row_id, :] = np.argsort(target_dist[row_id, :])
 
     def load_ids(self):
         """从磁盘读取或生成数据划分索引。"""
@@ -287,25 +442,17 @@ class DataHandler:
                     "Distance generation is likely to fail."
                 )
             self.generate_dist()
-            np.save(idx_dir + "train_dist.npy", self.train_dist)
-            np.save(idx_dir + "train_knn.npy", self.train_knn)
-            np.save(idx_dir + "query_dist.npy", self.query_dist)
-            np.save(idx_dir + "query_knn.npy", self.query_knn)
         else:
             print("# loading dist and knn from file")
-            self.train_dist = np.load(idx_dir + "train_dist.npy")
-            self.train_knn = np.load(idx_dir + "train_knn.npy")
-            self.query_dist = np.load(idx_dir + "query_dist.npy")
-            self.query_knn = np.load(idx_dir + "query_knn.npy")
+            self.train_dist = np.load(idx_dir + "train_dist.npy", mmap_mode="r")
+            self.train_knn = np.load(idx_dir + "train_knn.npy", mmap_mode="r")
+            self.query_dist = np.load(idx_dir + "query_dist.npy", mmap_mode="r")
+            self.query_knn = np.load(idx_dir + "query_knn.npy", mmap_mode="r")
             try:
                 self.validate_dist()
             except ValueError as exc:
                 print("# cached dist/knn invalid: {}".format(exc))
                 self.generate_dist()
-                np.save(idx_dir + "train_dist.npy", self.train_dist)
-                np.save(idx_dir + "train_knn.npy", self.train_knn)
-                np.save(idx_dir + "query_dist.npy", self.query_dist)
-                np.save(idx_dir + "query_knn.npy", self.query_knn)
 
     def set_nb(self, nb):
         """按用户要求裁剪候选库大小，并同步更新查询真值。"""
@@ -313,7 +460,10 @@ class DataHandler:
             self.base_ids = self.base_ids[:nb]
             self.query_dist = self.query_dist[:, :nb]
             self.query_knn = get_knn(self.query_dist)
-            self.xb.sig = self.xb.sig[:nb]
+            if getattr(self.xb, "sample_indices", None) is not None:
+                self.xb.sample_indices = self.xb.sample_indices[:nb]
+            else:
+                self.xb.sig = self.xb.sig[:nb]
             self.nb = nb
 
 
@@ -417,7 +567,7 @@ def get_args():
         if metadata is not None:
             total_items = metadata["train_size"] + metadata["query_size"] + metadata["base_size"]
         else:
-            total_items = len(ReadData_fromfile(args.dataset, args.data_type))
+            total_items = get_dataset_item_count(args.dataset, args.data_type)
         required_items = args.sample_size * 3
         if total_items < required_items:
             raise ValueError(

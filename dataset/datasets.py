@@ -70,7 +70,7 @@ def word2sig(lines, max_length=None, allowed_chars=None, fixed_alphabet=None):
 
 class StringDataset(Dataset):
 
-    def __init__(self, C, M, sig, data_type):
+    def __init__(self, C, M, sig, data_type, sequence_store=None, sample_indices=None, fixed_alphabet=None):
         """统一的数据集封装。
 
         对应论文 4.1 节:
@@ -81,6 +81,12 @@ class StringDataset(Dataset):
         self.C, self.M = C, M
         self.sig = sig
         self.data_type = data_type
+        self.sequence_store = sequence_store
+        self.sample_indices = sample_indices
+        self.fixed_alphabet = fixed_alphabet
+        self.char_to_id = None
+        if fixed_alphabet is not None:
+            self.char_to_id = {char: idx for idx, char in enumerate(fixed_alphabet)}
 
     def __getitem__(self, index):
         if self.data_type in ("protein", "dna"):
@@ -89,13 +95,24 @@ class StringDataset(Dataset):
             #   M: 统一后的最大序列长度
             # 每一列对应序列中的一个位置，每一行对应一个字符类别。
             encode = np.zeros((self.C, self.M), dtype=np.float32)
-            encode[np.array(self.sig[index]), np.arange(len(self.sig[index]))] = 1.0
+            if self.sequence_store is not None:
+                line = self.sequence_store.get(self.sample_indices[index])
+                sig = [self.char_to_id[c] for c in line]
+            else:
+                sig = self.sig[index]
+            encode[np.array(sig), np.arange(len(sig))] = 1.0
             return torch.from_numpy(encode)
         else:
             # 轨迹输入直接返回 [M, 2]，其中 2 表示 (x, y) / (lon, lat) 两个坐标维。
-            return torch.tensor(self.sig[index], dtype=torch.float32)
+            if self.sequence_store is not None:
+                value = self.sequence_store.get(self.sample_indices[index])
+            else:
+                value = self.sig[index]
+            return torch.tensor(value, dtype=torch.float32)
 
     def __len__(self):
+        if self.sample_indices is not None:
+            return len(self.sample_indices)
         return len(self.sig)
 
 
