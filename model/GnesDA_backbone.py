@@ -16,7 +16,7 @@ class GnesDA_backbone(nn.Module):
                  n_layers=6, d_model=64, n_heads=1, d_k=None, d_v=None, d_ff=256, norm=None, attn_dropout=0.,
                  dropout=0., act="gelu", is_mask=False, store_attn=False, pret_type="conv", conv_layers=6,
                  conv_channels=10, pe='sincos', learn_pe=True, padding_patch=None,
-                 revin=True, affine=False, subtract_last=False, data_type="protein"):
+                 revin=False, affine=False, subtract_last=False, data_type="protein"):
         """GnesDA 主干网络。
 
         论文第 4 节的实现顺序:
