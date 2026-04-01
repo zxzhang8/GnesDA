@@ -14,6 +14,14 @@ from distance.dist_computation import all_pair_distance
 
 
 def get_knn(dist):
+    """对真实距离矩阵逐行排序，得到每个样本的近邻索引。
+
+    参数:
+        dist: [num_query, num_base]，元素为真实序列距离。
+
+    返回:
+        knn: [num_query, num_base]，每一行是按距离升序排序后的 base 下标。
+    """
     knn = np.empty(dtype=np.int32, shape=(len(dist), len(dist[0])))
     for i in tqdm.tqdm(range(len(dist)), desc="# sorting for KNN indices"):
         knn[i, :] = np.argsort(dist[i, :])
@@ -21,6 +29,7 @@ def get_knn(dist):
 
 
 def get_dist_knn(dist_type, queries, base=None):
+    """计算两组序列的全对距离与对应的近邻排序。"""
     if base is None:
         base = queries
 
@@ -30,6 +39,12 @@ def get_dist_knn(dist_type, queries, base=None):
 
 
 def ReadData_fromfile(dataset):
+    """按数据集名称读取原始序列列表。
+
+    说明:
+        - protein 数据返回字符串序列列表。
+        - traj 数据返回轨迹列表，单条轨迹通常为 [[x, y], ...]。
+    """
     lines = []
     if dataset == "uniprot":
         datafile = ["train_seq_list", "query_seq_list", "base_seq_list"]
@@ -50,6 +65,12 @@ def ReadData_fromfile(dataset):
 
 class DataHandler:
     def __init__(self, args, data_f):
+        """负责数据划分、真实距离加载、以及模型输入构造。
+
+        与论文第 4 节对应:
+            1. 先将不同类型序列统一变换为 [D, L] 形式的矩阵输入。
+            2. 再交给下游卷积块 + Transformer 块进行编码。
+        """
         self.data_f    = data_f
         self.args      = args
         self.nt        = args.nt
@@ -60,21 +81,32 @@ class DataHandler:
 
         self.lines     = ReadData_fromfile(args.dataset)
 
+        # 若指定 maxl，则直接截断原始序列长度；0 表示不截断。
         if self.maxl != 0:
             self.lines = [l[: self.maxl] for l in self.lines]
         self.ni = len(self.lines)
         self.nb = self.ni - self.nq - self.nt
 
+        # 训练/查询/候选库的划分与真实距离矩阵会缓存到 knn/ 目录下，避免重复计算。
         self.load_ids()
         self.load_dist()
 
         start_time = time.time()
         if self.data_type == "protein":
+            # 蛋白质/字符串序列:
+            #   原始输入: 长度可变的字符序列
+            #   统一表示: one-hot 前的字符 id 序列，后续在 StringDataset 中转成 [C, M]
+            #   C: 字母表大小 |Z|
+            #   M: 数据集中最大序列长度
             self.C, self.M, self.char_ids, self.alphabet = word2sig(self.lines, max_length=None)
             self.string_t = [self.char_ids[i] for i in self.train_ids]
             self.string_q = [self.char_ids[i] for i in self.query_ids]
             self.string_b = [self.char_ids[i] for i in self.base_ids]
         elif self.data_type == "traj":
+            # 轨迹/数值序列:
+            #   原始输入: 长度可变的二维点序列 [[lon, lat], ...]
+            #   论文中的统一表示: 先做 min-max 风格的坐标平移/缩放，再经 MLP 映射到 D 维
+            #   这里先完成几何预处理与 padding，真正的 MLP 投影在 Pretreatment 中实现。
             self.traj_length_list = [len(traj) for traj in self.lines]
             self.M = max(self.traj_length_list)
             self.C = args.embed_channel
@@ -102,12 +134,14 @@ class DataHandler:
         )
 
     def generate_ids(self):
+        """按固定切片方式生成训练集、查询集、候选库索引。"""
         idx = np.arange(self.ni)
         self.train_ids = idx[: self.nt]
         self.query_ids = idx[self.nt: self.nq + self.nt]
         self.base_ids  = idx[self.nq + self.nt:]
 
     def generate_dist(self):
+        """计算训练集内部与查询集到候选库之间的真实距离。"""
         self.train_dist, self.train_knn = get_dist_knn(
                 self.args.dist_type,
             [self.lines[i] for i in self.train_ids]
@@ -119,6 +153,7 @@ class DataHandler:
         )
 
     def load_ids(self):
+        """从磁盘读取或生成数据划分索引。"""
         idx_dir = "{}/".format(self.data_f)
         if not os.path.isfile(idx_dir + "train_idx.npy"):
             self.generate_ids()
@@ -132,6 +167,7 @@ class DataHandler:
             self.base_ids  = np.load(idx_dir + "base_idx.npy")
 
     def load_dist(self):
+        """从磁盘读取或生成真实距离矩阵与近邻排序。"""
         idx_dir = "{}/".format(self.data_f)
         if not os.path.isfile(idx_dir + "train_dist.npy"):
             self.generate_dist()
@@ -147,6 +183,7 @@ class DataHandler:
             self.query_knn = np.load(idx_dir + "query_knn.npy")
 
     def set_nb(self, nb):
+        """按用户要求裁剪候选库大小，并同步更新查询真值。"""
         if nb < len(self.base_ids):
             self.base_ids = self.base_ids[:nb]
             self.query_dist = self.query_dist[:, :nb]
@@ -155,6 +192,14 @@ class DataHandler:
 
 
 def get_args():
+    """读取命令行参数，并构造数据处理器。
+
+    默认超参数基本对应论文实现:
+        - patch_len=16, stride=8
+        - e_layers=6
+        - protein 的最终嵌入维度约为 C * 5
+        - traj 的最终嵌入维度约为 C * 4
+    """
     parser = argparse.ArgumentParser(description="HyperParameters for String Embedding")
 
     parser.add_argument("--data_type",           type=str, default="protein", help="the type of data:protein or trajtory")

@@ -4,6 +4,15 @@ import numpy as np
 
 
 def l2_dist(q: np.ndarray, x: np.ndarray):
+    """计算两组二维向量的欧氏距离矩阵。
+
+    参数:
+        q: [num_query, dim]
+        x: [num_base, dim]
+
+    返回:
+        [num_query, num_base]
+    """
     assert len(q.shape) == 2
     assert len(x.shape) == 2
     assert q.shape[1] == q.shape[1]
@@ -16,6 +25,18 @@ def l2_dist(q: np.ndarray, x: np.ndarray):
 
 
 def l2_dist_separate(q: np.ndarray, x: np.ndarray, embed_channel):
+    """按通道分别计算欧氏距离后求和。
+
+    参数:
+        q: [num_query, C, T]
+        x: [num_base, C, T]
+
+    返回:
+        [num_query, num_base]
+
+    对应论文中的 embedding geometry：
+    先对每个通道独立算 L2，再在通道维求和。
+    """
     total_dis = np.zeros((len(q), len(x)))
     length = embed_channel
     for i in range(length):
@@ -26,6 +47,7 @@ def l2_dist_separate(q: np.ndarray, x: np.ndarray, embed_channel):
 
 
 def arg_sort(q, x, embed_channel):
+    """根据 embedding 距离从近到远返回检索排序。"""
     if len(q.shape) == 2:
         dists = l2_dist(q, x)
     else:
@@ -34,10 +56,19 @@ def arg_sort(q, x, embed_channel):
 
 
 def intersect_sizes(gs, ids):
+    """统计预测结果与真值 top-k 的交集大小。"""
     return np.array([len(np.intersect1d(g, list(id))) for g, id in zip(gs, ids)])
 
 
 def test_recall(X, Q, knn, G, embed_channel):
+    """评估近邻检索效果。
+
+    参数:
+        X: base embedding,  [num_base, C, T] 或 [num_base, T]
+        Q: query embedding, [num_query, C, T] 或 [num_query, T]
+        knn: 真实近邻排序,   [num_query, num_base]
+        G: 真实距离矩阵,     [num_query, num_base]
+    """
     ks = [1, 5, 10, 50, 100]
     Ts = [1, 5, 10, 50, 100]
     top_count_list = np.zeros((len(Ts), len(ks)))
@@ -94,6 +125,7 @@ def test_recall(X, Q, knn, G, embed_channel):
 
 
 def setup_seed(seed):
+    """固定 numpy / random / torch 随机种子。"""
     random.seed(seed)
     np.random.seed(seed)
     torch.manual_seed(seed)

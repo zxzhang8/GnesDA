@@ -17,6 +17,19 @@ class GnesDA_backbone(nn.Module):
                  dropout=0., act="gelu", is_mask=False, store_attn=False, pret_type="conv", conv_layers=6,
                  conv_channels=10, pe='sincos', learn_pe=True, padding_patch=None,
                  revin=True, affine=False, subtract_last=False, data_type="protein"):
+        """GnesDA 主干网络。
+
+        论文第 4 节的实现顺序:
+            1. Pretreatment: 统一输入表示并做卷积降采样
+            2. RevIN: 可逆归一化（论文主实验通常不启用 norm）
+            3. Patching: 对每个通道独立切 patch
+            4. Transformer Encoder: 建模长程依赖
+            5. Flatten + MLP: 生成每个通道对应的最终 embedding
+
+        形状约定:
+            输入 z: [B, C, L]
+            输出 z: [B, C, T]，其中 T = embed_len // C
+        """
 
         super().__init__()
         self.is_mask   = is_mask
@@ -65,6 +78,12 @@ class GnesDA_backbone(nn.Module):
         )
 
     def forward(self, z):  # z: [bs x nvars x seq_len]
+        # Step 1. 统一输入表示 + 卷积块:
+        #   输入:
+        #       protein: [B, C, M]
+        #       traj:    [B, M, 2]，由 Pretreatment 内部映射为 [B, C, M_conv]
+        #   输出:
+        #       z: [B, C, L_conv]
         z = self.pretreatment(z)
 
         attn_mask = None
@@ -76,28 +95,46 @@ class GnesDA_backbone(nn.Module):
 
         # norm
         if self.revin:
+            # RevIN 期望输入为 [B, L_conv, C]
             z = z.permute(0, 2, 1)
             z = self.revin_layer(z, 'norm')
+            # 再转回 [B, C, L_conv]
             z = z.permute(0, 2, 1)
 
         # do patching
         if self.do_patching:
             if self.padding_patch == 'end':
+                # [B, C, L_conv] -> [B, C, L_conv + stride]
                 z = self.padding_patch_layer(z)
+            # unfold 后:
+            #   [B, C, patch_num, patch_len]
+            # 含义:
+            #   对每个通道独立切 patch，每个 token 是长度为 patch_len 的局部子序列
             z = z.unfold(dimension=-1, size=self.patch_len, step=self.stride)  # z: [bs x nvars x patch_num x patch_len]
+            # 将 batch 维与通道维合并，便于“每个通道独立送入 Transformer”
+            # [B, C, patch_num, patch_len] -> [B*C, patch_num, patch_len]
             z = torch.reshape(z, (z.shape[0] * z.shape[1], z.shape[2], z.shape[3]))  # z: [bs*nvars x patch_num x patch_len]
         else:
             z = z.transpose(1, 2)
 
         # model
+        # Transformer 输出:
+        #   [B*C, patch_num, d_model]
         z = self.backbone(z, attn_mask)  # z: [bs*nvars x patch_num x d_model]
         if self.do_patching:
+            # 恢复通道维:
+            # [B*C, patch_num, d_model] -> [B, C, patch_num, d_model]
             z = torch.reshape(z, (-1, self.c_in, z.shape[-2], z.shape[-1]))
+        # Flatten(start_dim=-2):
+        #   [B, C, patch_num, d_model] -> [B, C, patch_num * d_model]
         z = self.flatten(z)
+        # MLP:
+        #   [B, C, patch_num * d_model] -> [B, C, embed_len // C]
         z = self.MLP(z)
 
         # denorm
         if self.revin:
+            # [B, C, T] -> [B, T, C] -> RevIN -> [B, C, T]
             z = z.permute(0, 2, 1)
             z = self.revin_layer(z, 'denorm')
             z = z.permute(0, 2, 1)
@@ -106,6 +143,11 @@ class GnesDA_backbone(nn.Module):
 
 
 def get_attn_mask(max_len, lens):
+    """根据每个样本的有效 patch 数构造 attention mask。
+
+    返回:
+        [B, max_len, max_len]，True 表示该位置被 mask。
+    """
     batch_size = len(lens)
     k = torch.zeros((len(lens), max_len))  # k: [bs x max_len]
     for i, l in enumerate(lens):
@@ -139,7 +181,9 @@ class GnesDAiEncoder(nn.Module):
 
     def forward(self, x, attn_mask=None):  # x: [bs*nvars x patch_num x patch_len]
         # Input encoding
+        # 每个 patch token 是长度为 patch_len 的向量，经线性层投影到 d_model
         x = self.W_P(x)  # x: [bs*nvars x patch_num x d_model]
+        # 广播加位置编码 [patch_num, d_model]
         u = self.dropout(x + self.W_pos)  # u: [bs*nvars x patch_num x d_model]
 
         # Encoder
@@ -160,6 +204,7 @@ class GnesDAEncoder(nn.Module):
             )
 
     def forward(self, src, attn_mask=None):
+        # src: [B*C, patch_num, d_model]
         output = src
 
         for attn_layer in self.attn_layers:
@@ -205,6 +250,7 @@ class GnesDAEncoderLayer(nn.Module):
 
     def forward(self, src, attn_mask=None):
         # Attention
+        # src/src2: [B*C, patch_num, d_model]
         src2 = self.self_attn(src, src, src, attn_mask=attn_mask)
 
         # Add & Norm
@@ -244,19 +290,27 @@ class _MultiheadAttention(nn.Module):
                                     )
 
     def forward(self, Q, K=None, V=None, attn_mask=None):
+        # Q/K/V: [B*C, patch_num, d_model]
 
         bs = Q.size(0)
         if K is None: K = Q
         if V is None: V = Q
 
+        # 线性映射并拆分多头:
+        #   q_s: [B*C, n_heads, patch_num, d_k]
         q_s = self.W_Q(Q).view(bs, -1, self.n_heads, self.d_k).transpose(1, 2)      # q_s: [bs x n_heads x max_q_len x d_k]
+        #   k_s: [B*C, n_heads, d_k, patch_num]
         k_s = self.W_K(K).view(bs, -1, self.n_heads, self.d_k).permute(0, 2, 3, 1)  # k_s: [bs x n_heads x d_k x q_len]
+        #   v_s: [B*C, n_heads, patch_num, d_v]
         v_s = self.W_V(V).view(bs, -1, self.n_heads, self.d_v).transpose(1, 2)      # v_s: [bs x n_heads x q_len x d_v]
 
         # Apply Scaled Dot-Product Attention
         output = self.sdp_attn(q_s, k_s, v_s, attn_mask=attn_mask)
 
+        # 合并多头:
+        #   [B*C, n_heads, patch_num, d_v] -> [B*C, patch_num, n_heads * d_v]
         output = output.transpose(1, 2).contiguous().view(bs, -1, self.n_heads * self.d_v)  # output: [bs x q_len x n_heads * d_v]
+        # 再投影回 d_model
         output = self.to_out(output)
 
         return output
@@ -272,10 +326,17 @@ class _ScaledDotProductAttention(nn.Module):
         self.scale        = nn.Parameter(torch.tensor(head_dim ** -0.5), requires_grad=False)
 
     def forward(self, q, k, v, attn_mask=None):
+        # q: [B*C, H, N, d_k]
+        # k: [B*C, H, d_k, N]
+        # v: [B*C, H, N, d_v]
+        # 输出 attention score: [B*C, H, N, N]
         attn_scores = torch.matmul(q, k) * self.scale  # attn_scores : [bs x n_heads x max_q_len x q_len]
 
         # Attention mask
         if attn_mask is not None:
+            # 原始 attn_mask 是按样本构造的 [B, N, N]
+            # 这里因为前面把 batch 和 channel 合并成了 B*C，
+            # 所以需要重新展开成 [B, C, H, N, N] 再广播 mask。
             channels    = q.shape[0] // attn_mask.shape[0]
             attn_scores = attn_scores.view(-1, channels, attn_scores.shape[1], attn_scores.shape[2], attn_scores.shape[3])  # attn_scores: [bs x channels x n_heads x max_q_len x q_len]
             attn_mask   = attn_mask.unsqueeze(1).repeat(1, self.n_heads, 1, 1)  # attn_mask: [bs x n_heads x seq_len x seq_len]
@@ -293,6 +354,7 @@ class _ScaledDotProductAttention(nn.Module):
         return output
 
 def visualize(attn_scores, batch_num):
+    """调试用：保存注意力热力图。"""
     non_zero_cols = np.any(attn_scores != 0, axis=0)
     attn_scores = attn_scores[non_zero_cols][:, non_zero_cols]
 
@@ -308,4 +370,3 @@ def visualize(attn_scores, batch_num):
     plt.savefig(output_path)
 
     plt.close()
-

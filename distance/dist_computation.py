@@ -10,6 +10,7 @@ from distance.edr import edr_dis
 import distance.pairwise_alignment as pa
 
 def f(x, dist_type):
+    """计算单个查询序列到一组候选序列的真实距离。"""
     a, B = x
     if dist_type == "ed":
         return [Levenshtein.distance(a, b) for b in B]
@@ -28,6 +29,11 @@ def f(x, dist_type):
 
 
 def all_pair_distance(A, B, n_thread, dist_type, progress=True):
+    """多进程计算两组序列的全对距离矩阵。
+
+    返回:
+        [len(A), len(B)]
+    """
     bar = tqdm if progress else lambda iterable, total, desc: iterable
     g = partial(f, dist_type=dist_type)
 

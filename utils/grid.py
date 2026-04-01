@@ -4,6 +4,7 @@ GRID_SIZE = 0.002
 
 
 def _equal_grid(one_dim_list):
+    """统计单个坐标维度的整体取值范围。"""
     min_value_list = [np.min(value) for value in one_dim_list]
     max_value_list = [np.max(value) for value in one_dim_list]
 
@@ -18,6 +19,18 @@ def _equal_grid(one_dim_list):
 
 
 def split_traj_into_equal_grid(traj_list):
+    """对轨迹做统一的坐标平移/缩放预处理。
+
+    参数:
+        traj_list: List[[[lon, lat], ...]]
+
+    返回:
+        处理后的轨迹列表，单个点仍是二维向量 [x, y]。
+
+    说明:
+        论文中数值序列先做预处理再送入 MLP。
+        这里的实现并非严格 min-max 到 [0,1]，而是减去全局最小值后再放缩。
+    """
     lon_list = []
     lat_list = []
     for traj in traj_list:
@@ -51,6 +64,11 @@ def split_traj_into_equal_grid(traj_list):
 
 
 def pad_traj_list(dist_type, seq_list, max_length, pad_value=0.0):
+    """将所有轨迹补齐到统一长度。
+
+    输出中每条轨迹形状为 [max_length, 2]。
+    对 DTW，padding 值使用最后一个真实点，避免尾部突变过大。
+    """
     value = [1.0 * pad_value for i in range(len(seq_list[0][0]))]
     final_pad_seq_list = []
     for seq in seq_list:

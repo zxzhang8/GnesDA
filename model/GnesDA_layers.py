@@ -9,6 +9,7 @@ class Transpose(nn.Module):
         self.dims, self.contiguous = dims, contiguous
 
     def forward(self, x):
+        # 仅交换两个维度，不改变其它维度大小。
         if self.contiguous:
             return x.transpose(*self.dims).contiguous()
         else:
@@ -26,6 +27,7 @@ def get_activation_fn(activation):
 
 
 def PositionalEncoding(q_len, d_model, normalize=True):
+    """标准正余弦位置编码，输出 [q_len, d_model]。"""
     pe = torch.zeros(q_len, d_model)
     position = torch.arange(0, q_len).unsqueeze(1)
     div_term = torch.exp(torch.arange(0, d_model, 2) * -(math.log(10000.0) / d_model))
@@ -38,6 +40,7 @@ def PositionalEncoding(q_len, d_model, normalize=True):
 
 
 def positional_encoding(pe, learn_pe, q_len, d_model):
+    """构造位置编码参数，形状始终为 [q_len, d_model]。"""
     # Positional encoding
     if pe == None:
         W_pos = torch.empty((q_len, d_model))

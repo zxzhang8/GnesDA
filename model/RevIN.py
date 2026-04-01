@@ -4,6 +4,12 @@ import torch.nn as nn
 
 class RevIN(nn.Module):
     def __init__(self, num_features: int, eps=1e-5, affine=True, subtract_last=False):
+        """RevIN: Reversible Instance Normalization.
+
+        本仓库默认在论文设置下通常关闭 affine，并可完全移除 norm。
+        当启用时，输入/输出形状均保持:
+            x: [B, L, C]
+        """
         super(RevIN, self).__init__()
         self.num_features = num_features
         self.eps = eps
@@ -13,6 +19,7 @@ class RevIN(nn.Module):
             self._init_params()
 
     def forward(self, x, mode:str):
+        # x: [B, L, C]
         if mode == 'norm':
             self._get_statistics(x)
             x = self._normalize(x)
@@ -28,6 +35,8 @@ class RevIN(nn.Module):
         self.affine_bias = nn.Parameter(torch.zeros(self.num_features))
 
     def _get_statistics(self, x):
+        # 对除了 batch 维和最后通道维之外的维度做统计。
+        # 当 x 为 [B, L, C] 时，dim2reduce=(1,)
         dim2reduce = tuple(range(1, x.ndim - 1))
         if self.subtract_last:
             self.last = x[:, -1, :].unsqueeze(1)

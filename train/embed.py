@@ -11,17 +11,26 @@ from dataset.datasets import TripletString, StringDataset
 
 
 def _batch_embed(args, net, vecs: StringDataset, device):
+    """分批将整个数据集编码为 embedding。
+
+    返回:
+        protein / traj 均为 [N, C, T]
+        其中 C 是统一后的通道数，T = embed_len // C
+    """
     test_loader = torch.utils.data.DataLoader(vecs, batch_size=args.test_batch_size, shuffle=False, num_workers=10)
     net.eval()
     embedding = []
     with tqdm.tqdm(total=len(test_loader), desc="# batch embedding") as p_bar:
         for i, x in enumerate(test_loader):
             p_bar.update(1)
+            # net(x) 输出:
+            #   [B, C, T]
             embedding.append(net(x.to(device)).cpu().data.numpy())
     return np.concatenate(embedding, axis=0)
 
 
 def GnesDA_embedding(args, h, data_file):
+    """训练 GnesDA，并对 train / base / query 三部分数据做编码与检索评估。"""
     if torch.cuda.is_available() and not args.no_cuda:
         device = torch.device("cuda")
     else:

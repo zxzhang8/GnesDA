@@ -8,6 +8,10 @@ Copyright 2022 Andrzej Zielezinski (a.zielezinski@gmail.com)
 https://github.com/aziele/pairwise-alignment
 """
 
+# 该文件是对 EMBOSS `needle/water` 的轻量封装，主要用于计算论文中的
+# NW 类蛋白质序列对齐相似度/距离真值。这里不涉及张量计算，因此仅补充
+# 功能性中文注释，不额外引入维度说明。
+
 from __future__ import annotations
 from collections import namedtuple
 from typing import Optional

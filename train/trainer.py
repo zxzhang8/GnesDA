@@ -9,10 +9,17 @@ from train.network import TripletNet, TripletLoss
 
 
 def train_epoch(args, train_set, device):
+    """训练一个 GnesDA 三元组网络并返回完整模型。"""
     C, M = train_set.C, train_set.M
 
     torch.manual_seed(time.time())
 
+    # DataLoader 输出:
+    #   anchor / pos / neg:
+    #       protein: [B, C, M]
+    #       traj:    [B, M, 2]
+    #   三个真实距离:
+    #       [B]
     train_loader = torch.utils.data.DataLoader(train_set, batch_size=args.batch_size, shuffle=True, num_workers=10)
     train_steps  = len(train_loader)
 
@@ -47,6 +54,9 @@ def train_epoch(args, train_set, device):
                 ) = (i.to(device) for i in batch)
 
                 optimizer.zero_grad()
+                # output 是长度为 3 的 tuple，
+                # 每一项来自 GnesDAModel.forward:
+                #   一般形状为 [B, C, T]，其中 T = embed_len // C
                 output = model((anchor, pos, neg))
 
                 r, m, loss = losser(
