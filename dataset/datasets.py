@@ -5,12 +5,14 @@ from random import randint
 from torch.utils.data import Dataset
 
 
-def word2sig(lines, max_length=None):
+def word2sig(lines, max_length=None, allowed_chars=None, fixed_alphabet=None):
     """将字符序列映射为离散 id 序列。
 
     参数:
         lines: List[str]，原始字符串/蛋白质序列。
         max_length: 允许的最大长度；若为 None，则取数据集最大长度。
+        allowed_chars: 允许出现的字符集合；若不为 None，则会严格校验。
+        fixed_alphabet: 固定字母表顺序；若给定，则按该顺序分配 id。
 
     返回:
         C: 字母表大小 |Z|
@@ -24,12 +26,30 @@ def word2sig(lines, max_length=None):
     elif max_length < np.max(lens):
         warnings.warn("K is {} while strings may " "exceed the maximum length {}".format(max_length, np.max(lens)))
 
-    # all_chars = {'A': 0, 'B': 1, 'C': 2, 'D': 3, 'E': 4, 'F': 5, 'G': 6, 'H': 7, 'I': 8, 'K': 9, 'L': 10, 'M': 11,
-    #              'N': 12, 'O': 13, 'P': 14, 'Q': 15, 'R': 16, 'S': 17, 'T': 18, 'U': 19, 'V': 20, 'W': 21, 'x': 22,
-    #              'Y': 23, 'Z': 24}
     all_chars = dict()
     all_chars["counter"] = 0
-    alphabet = ''
+    alphabet = ""
+
+    if fixed_alphabet is not None:
+        alphabet = fixed_alphabet
+        for idx, char in enumerate(fixed_alphabet):
+            all_chars[char] = idx
+        all_chars["counter"] = len(fixed_alphabet)
+
+    if allowed_chars is not None:
+        allowed_chars = set(allowed_chars)
+
+    def validate_line(line_idx, line):
+        if allowed_chars is None:
+            return
+        invalid = sorted(set(line) - allowed_chars)
+        if invalid:
+            preview = line[:50]
+            raise ValueError(
+                "Invalid characters {} found in sequence {}: {!r}. Allowed characters are: {}.".format(
+                    invalid, line_idx, preview, "".join(sorted(allowed_chars))
+                )
+            )
 
     def to_ord(c):
         nonlocal all_chars
@@ -40,7 +60,10 @@ def word2sig(lines, max_length=None):
             all_chars["counter"] = all_chars["counter"] + 1
         return all_chars[c]
 
-    x = [[to_ord(c) for c in line] for line in lines]
+    x = []
+    for line_idx, line in enumerate(lines):
+        validate_line(line_idx, line)
+        x.append([to_ord(c) for c in line])
 
     return all_chars["counter"], max_length, x, alphabet
 
@@ -51,7 +74,7 @@ class StringDataset(Dataset):
         """统一的数据集封装。
 
         对应论文 4.1 节:
-            - protein: 输出 one-hot 矩阵 [C, M]
+            - protein / dna: 输出 one-hot 矩阵 [C, M]
             - traj: 输出 padding 后的连续值矩阵 [M, 2]
               后续会在 Pretreatment 中通过 MLP 投影到 [C, M]
         """
@@ -60,7 +83,7 @@ class StringDataset(Dataset):
         self.data_type = data_type
 
     def __getitem__(self, index):
-        if self.data_type == "protein":
+        if self.data_type in ("protein", "dna"):
             # encode: [C, M]
             #   C: 字母表大小 / 通道数
             #   M: 统一后的最大序列长度

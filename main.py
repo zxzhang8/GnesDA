@@ -28,32 +28,31 @@ def get_knn(dist):
     return knn
 
 
-def get_dist_knn(dist_type, queries, base=None):
+def get_dist_knn(dist_type, queries, base=None, data_type=None):
     """计算两组序列的全对距离与对应的近邻排序。"""
     if base is None:
         base = queries
 
-    dist = all_pair_distance(queries, base, cpu_count(), dist_type)
+    dist = all_pair_distance(queries, base, cpu_count(), dist_type, data_type=data_type)
 
     return dist, get_knn(dist)
 
 
-def ReadData_fromfile(dataset):
+def ReadData_fromfile(dataset, data_type):
     """按数据集名称读取原始序列列表。
 
     说明:
-        - protein 数据返回字符串序列列表。
+        - protein / dna 数据返回字符串序列列表。
         - traj 数据返回轨迹列表，单条轨迹通常为 [[x, y], ...]。
     """
     lines = []
-    if dataset == "uniprot":
-        datafile = ["train_seq_list", "query_seq_list", "base_seq_list"]
-        for d in datafile:
-            lines.extend(pickle.load(open("data/uniprot/{}".format(d), "rb")))
-    elif dataset == "uniref":
-        datafile = ["train_seq_list", "query_seq_list", "base_seq_list"]
-        for d in datafile:
-            lines.extend(pickle.load(open("data/uniref/{}".format(d), "rb")))
+    if data_type in ("protein", "dna"):
+        if dataset in ("uniprot", "uniref") or os.path.isdir("data/{}".format(dataset)):
+            datafile = ["train_seq_list", "query_seq_list", "base_seq_list"]
+            for d in datafile:
+                lines.extend(pickle.load(open("data/{}/{}".format(dataset, d), "rb")))
+        else:
+            raise ValueError("wrong dataset type!!!")
     elif dataset == "geolife":
         lines.extend(pickle.load(open("data/0_geolife/traj_list", "rb")))
     elif dataset == "porto":
@@ -79,7 +78,7 @@ class DataHandler:
         self.dataset   = args.dataset
         self.data_type = args.data_type
 
-        self.lines     = ReadData_fromfile(args.dataset)
+        self.lines     = ReadData_fromfile(args.dataset, args.data_type)
 
         # 若指定 maxl，则直接截断原始序列长度；0 表示不截断。
         if self.maxl != 0:
@@ -92,13 +91,23 @@ class DataHandler:
         self.load_dist()
 
         start_time = time.time()
-        if self.data_type == "protein":
-            # 蛋白质/字符串序列:
+        if self.data_type in ("protein", "dna"):
+            # 离散字符序列:
             #   原始输入: 长度可变的字符序列
             #   统一表示: one-hot 前的字符 id 序列，后续在 StringDataset 中转成 [C, M]
             #   C: 字母表大小 |Z|
             #   M: 数据集中最大序列长度
-            self.C, self.M, self.char_ids, self.alphabet = word2sig(self.lines, max_length=None)
+            allowed_chars = None
+            fixed_alphabet = None
+            if self.data_type == "dna":
+                allowed_chars = "ACGT"
+                fixed_alphabet = "ACGT"
+            self.C, self.M, self.char_ids, self.alphabet = word2sig(
+                self.lines,
+                max_length=None,
+                allowed_chars=allowed_chars,
+                fixed_alphabet=fixed_alphabet,
+            )
             self.string_t = [self.char_ids[i] for i in self.train_ids]
             self.string_q = [self.char_ids[i] for i in self.query_ids]
             self.string_b = [self.char_ids[i] for i in self.base_ids]
@@ -143,13 +152,15 @@ class DataHandler:
     def generate_dist(self):
         """计算训练集内部与查询集到候选库之间的真实距离。"""
         self.train_dist, self.train_knn = get_dist_knn(
-                self.args.dist_type,
-            [self.lines[i] for i in self.train_ids]
+            self.args.dist_type,
+            [self.lines[i] for i in self.train_ids],
+            data_type=self.data_type,
         )
         self.query_dist, self.query_knn = get_dist_knn(
-                self.args.dist_type,
+            self.args.dist_type,
             [self.lines[i] for i in self.query_ids],
             [self.lines[i] for i in self.base_ids],
+            data_type=self.data_type,
         )
 
     def load_ids(self):
@@ -197,12 +208,12 @@ def get_args():
     默认超参数基本对应论文实现:
         - patch_len=16, stride=8
         - e_layers=6
-        - protein 的最终嵌入维度约为 C * 5
+        - protein / dna 的最终嵌入维度约为 C * 5
         - traj 的最终嵌入维度约为 C * 4
     """
     parser = argparse.ArgumentParser(description="HyperParameters for String Embedding")
 
-    parser.add_argument("--data_type",           type=str, default="protein", help="the type of data:protein or trajtory")
+    parser.add_argument("--data_type",           type=str, default="protein", choices=["protein", "dna", "traj"], help="the type of data: protein, dna or trajtory")
     parser.add_argument("--dataset",             type=str, default="uniprot", help="dataset")
     parser.add_argument("--embed-dir",           type=str, default="", help="embedding save location")
     parser.add_argument("--embed",               type=str, default="transformer", help="embedding method")
@@ -246,6 +257,9 @@ def get_args():
     parser.add_argument('--norm',                type=str, default=None, help='transformer norm type')
 
     args = parser.parse_args()
+    if args.data_type == "dna" and args.dist_type not in ("ed", "nw"):
+        raise ValueError("DNA only supports 'ed' and 'nw' distance types.")
+
     print(f"d_model:{args.d_model}")
     print(f"e_layers:{args.e_layers}")
     print(f"conv_layers:{args.conv_layers}")
