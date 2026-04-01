@@ -3,6 +3,7 @@ import time
 import tqdm
 import pickle
 import argparse
+import shutil
 import numpy as np
 from multiprocessing import cpu_count
 
@@ -63,6 +64,35 @@ def ReadData_fromfile(dataset, data_type):
     return lines
 
 
+def format_bytes(num_bytes):
+    """将字节数格式化为易读字符串。"""
+    units = ["B", "KiB", "MiB", "GiB", "TiB", "PiB"]
+    size = float(num_bytes)
+    for unit in units:
+        if size < 1024.0 or unit == units[-1]:
+            return f"{size:.2f} {unit}"
+        size /= 1024.0
+
+
+def estimate_knn_cache_size(train_count, query_count, base_count, dist_itemsize=8, knn_itemsize=4):
+    """估算首次生成距离矩阵与 KNN 缓存时的磁盘占用。"""
+    train_entries = train_count * train_count
+    query_entries = query_count * base_count
+
+    train_dist_bytes = train_entries * dist_itemsize
+    train_knn_bytes = train_entries * knn_itemsize
+    query_dist_bytes = query_entries * dist_itemsize
+    query_knn_bytes = query_entries * knn_itemsize
+
+    return {
+        "train_dist_bytes": train_dist_bytes,
+        "train_knn_bytes": train_knn_bytes,
+        "query_dist_bytes": query_dist_bytes,
+        "query_knn_bytes": query_knn_bytes,
+        "total_bytes": train_dist_bytes + train_knn_bytes + query_dist_bytes + query_knn_bytes,
+    }
+
+
 class DataHandler:
     def __init__(self, args, data_f):
         """负责数据划分、真实距离加载、以及模型输入构造。
@@ -75,6 +105,7 @@ class DataHandler:
         self.args      = args
         self.nt        = args.nt
         self.nq        = args.nq
+        self.nb        = args.nb
         self.maxl      = args.maxl
         self.dataset   = args.dataset
         self.data_type = args.data_type
@@ -85,7 +116,12 @@ class DataHandler:
         if self.maxl != 0:
             self.lines = [l[: self.maxl] for l in self.lines]
         self.ni = len(self.lines)
-        self.nb = self.ni - self.nq - self.nt
+        if self.nt + self.nq + self.nb > self.ni:
+            raise ValueError(
+                "Dataset '{}' contains {} sequences, but nt + nq + nb = {} exceeds it.".format(
+                    self.dataset, self.ni, self.nt + self.nq + self.nb
+                )
+            )
 
         # 训练/查询/候选库的划分与真实距离矩阵会缓存到 knn/ 目录下，避免重复计算。
         self.load_ids()
@@ -148,7 +184,47 @@ class DataHandler:
         idx = np.arange(self.ni)
         self.train_ids = idx[: self.nt]
         self.query_ids = idx[self.nt: self.nq + self.nt]
-        self.base_ids  = idx[self.nq + self.nt:]
+        self.base_ids  = idx[self.nq + self.nt: self.nq + self.nt + self.nb]
+
+    def validate_ids(self):
+        """校验缓存索引是否与当前 nt / nq / nb 配置一致。"""
+        expected_lengths = {
+            "train_ids": self.nt,
+            "query_ids": self.nq,
+            "base_ids": self.nb,
+        }
+        actual_lengths = {
+            "train_ids": len(self.train_ids),
+            "query_ids": len(self.query_ids),
+            "base_ids": len(self.base_ids),
+        }
+        for name, expected in expected_lengths.items():
+            actual = actual_lengths[name]
+            if actual != expected:
+                raise ValueError(
+                    "Cached {} length {} does not match expected {}.".format(name, actual, expected)
+                )
+
+    def validate_dist(self):
+        """校验缓存矩阵 shape 是否与当前配置一致。"""
+        expected_shapes = {
+            "train_dist": (self.nt, self.nt),
+            "train_knn": (self.nt, self.nt),
+            "query_dist": (self.nq, self.nb),
+            "query_knn": (self.nq, self.nb),
+        }
+        actual_shapes = {
+            "train_dist": self.train_dist.shape,
+            "train_knn": self.train_knn.shape,
+            "query_dist": self.query_dist.shape,
+            "query_knn": self.query_knn.shape,
+        }
+        for name, expected in expected_shapes.items():
+            actual = actual_shapes[name]
+            if actual != expected:
+                raise ValueError(
+                    "Cached {} shape {} does not match expected {}.".format(name, actual, expected)
+                )
 
     def generate_dist(self):
         """计算训练集内部与查询集到候选库之间的真实距离。"""
@@ -177,11 +253,39 @@ class DataHandler:
             self.train_ids = np.load(idx_dir + "train_idx.npy")
             self.query_ids = np.load(idx_dir + "query_idx.npy")
             self.base_ids  = np.load(idx_dir + "base_idx.npy")
+            try:
+                self.validate_ids()
+            except ValueError as exc:
+                print("# cached indices invalid: {}".format(exc))
+                self.generate_ids()
+                np.save(idx_dir + "train_idx.npy", self.train_ids)
+                np.save(idx_dir + "query_idx.npy", self.query_ids)
+                np.save(idx_dir + "base_idx.npy", self.base_ids)
 
     def load_dist(self):
         """从磁盘读取或生成真实距离矩阵与近邻排序。"""
         idx_dir = "{}/".format(self.data_f)
         if not os.path.isfile(idx_dir + "train_dist.npy"):
+            estimate = estimate_knn_cache_size(
+                train_count=len(self.train_ids),
+                query_count=len(self.query_ids),
+                base_count=len(self.base_ids),
+            )
+            _, _, free_bytes = shutil.disk_usage(idx_dir)
+            print(
+                "# Estimated disk usage before distance generation\n"
+                f"# train_dist.npy  : {format_bytes(estimate['train_dist_bytes'])}\n"
+                f"# train_knn.npy   : {format_bytes(estimate['train_knn_bytes'])}\n"
+                f"# query_dist.npy  : {format_bytes(estimate['query_dist_bytes'])}\n"
+                f"# query_knn.npy   : {format_bytes(estimate['query_knn_bytes'])}\n"
+                f"# total_estimated : {format_bytes(estimate['total_bytes'])}\n"
+                f"# disk_free       : {format_bytes(free_bytes)}"
+            )
+            if estimate["total_bytes"] > free_bytes:
+                print(
+                    "# Warning: estimated cache size exceeds currently available disk space. "
+                    "Distance generation is likely to fail."
+                )
             self.generate_dist()
             np.save(idx_dir + "train_dist.npy", self.train_dist)
             np.save(idx_dir + "train_knn.npy", self.train_knn)
@@ -193,6 +297,15 @@ class DataHandler:
             self.train_knn = np.load(idx_dir + "train_knn.npy")
             self.query_dist = np.load(idx_dir + "query_dist.npy")
             self.query_knn = np.load(idx_dir + "query_knn.npy")
+            try:
+                self.validate_dist()
+            except ValueError as exc:
+                print("# cached dist/knn invalid: {}".format(exc))
+                self.generate_dist()
+                np.save(idx_dir + "train_dist.npy", self.train_dist)
+                np.save(idx_dir + "train_knn.npy", self.train_knn)
+                np.save(idx_dir + "query_dist.npy", self.query_dist)
+                np.save(idx_dir + "query_knn.npy", self.query_knn)
 
     def set_nb(self, nb):
         """按用户要求裁剪候选库大小，并同步更新查询真值。"""
@@ -201,6 +314,7 @@ class DataHandler:
             self.query_dist = self.query_dist[:, :nb]
             self.query_knn = get_knn(self.query_dist)
             self.xb.sig = self.xb.sig[:nb]
+            self.nb = nb
 
 
 def get_args():
@@ -223,6 +337,7 @@ def get_args():
     parser.add_argument("--nt",                  type=int, default=1000, help="training samples")
     parser.add_argument("--nq",                  type=int, default=1000, help="query items")
     parser.add_argument("--nb",                  type=int, default=5000000, help="base items")
+    parser.add_argument("--sample-size",         type=int, default=0, help="optional unified sample count for train/query/base")
     parser.add_argument("--k",                   type=int, default=200, help="sampling threshold")
     parser.add_argument("--maxl",                type=int, default=0, help="max length of strings")
 
@@ -257,18 +372,21 @@ def get_args():
     parser.add_argument('--n_heads',             type=int, default=1, help='num of heads')
     parser.add_argument('--d_ff',                type=int, default=256, help='dimension of fcn')
     parser.add_argument('--dropout',             type=float, default=0.05, help='dropout')
-    parser.add_argument('--patch_len',           type=int, default=16, help='patch length')
+    parser.add_argument('--patch_len',           type=int, default=6, help='patch length')
     parser.add_argument('--padding_patch',       type=str, default='end', help='None: None; end: padding on the end')
-    parser.add_argument('--stride',              type=int, default=8, help='stride')
+    parser.add_argument('--stride',              type=int, default=3, help='stride')
     parser.add_argument('--affine',              type=int, default=0, help='RevIN-affine; True 1 False 0')
-    parser.add_argument('--revin',               type=int, default=1, help='RevIN; True 1 False 0')
+    parser.add_argument('--revin',               type=int, default=0, help='RevIN; True 1 False 0')
     parser.add_argument('--subtract_last',       type=int, default=0, help='0: subtract mean; 1: subtract last')
     parser.add_argument('--norm',                type=str, default=None, help='transformer norm type')
 
     args = parser.parse_args()
     if args.data_type == "dna" and args.dist_type not in ("ed", "nw"):
         raise ValueError("DNA only supports 'ed' and 'nw' distance types.")
+    if args.sample_size < 0:
+        raise ValueError("--sample-size must be non-negative.")
 
+    metadata = None
     if args.data_type == "dna":
         metadata = prepare_dna_dataset(
             dataset=args.dataset,
@@ -291,6 +409,24 @@ def get_args():
                 f"# max_sequence_length:{metadata['max_sequence_length']}"
             )
 
+    if args.sample_size:
+        args.nt = args.sample_size
+        args.nq = args.sample_size
+        args.nb = args.sample_size
+
+        if metadata is not None:
+            total_items = metadata["train_size"] + metadata["query_size"] + metadata["base_size"]
+        else:
+            total_items = len(ReadData_fromfile(args.dataset, args.data_type))
+        required_items = args.sample_size * 3
+        if total_items < required_items:
+            raise ValueError(
+                "Dataset '{}' contains {} sequences, but --sample-size {} requires at least {} "
+                "(train/query/base each need that many).".format(
+                    args.dataset, total_items, args.sample_size, required_items
+                )
+            )
+
     print(f"d_model:{args.d_model}")
     print(f"e_layers:{args.e_layers}")
     print(f"conv_layers:{args.conv_layers}")
@@ -301,11 +437,12 @@ def get_args():
     print(f"embed-len:{args.embed_len}")
     print(f"embed-channel:{args.embed_channel}")
 
-    data_file = "knn/{}/{}/nt{}_nq{}".format(
+    data_file = "knn/{}/{}/nt{}_nq{}_nb{}".format(
         args.dataset,
         args.dist_type,
         args.nt,
         args.nq,
+        args.nb,
     )
     os.makedirs(data_file, exist_ok=True)
     setup_seed(args.shuffle_seed)
