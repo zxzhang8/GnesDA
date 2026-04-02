@@ -8,7 +8,7 @@ from model.GnesDA import GnesDAModel
 from train.network import TripletNet, TripletLoss
 
 
-def train_epoch(args, train_set, device):
+def train_epoch(args, train_set, device, eval_fn=None):
     """训练一个 GnesDA 三元组网络并返回完整模型。"""
     C, M = train_set.C, train_set.M
 
@@ -44,7 +44,11 @@ def train_epoch(args, train_set, device):
                                         epochs=args.epochs,
                                         max_lr=args.learning_rate)
 
-    with tqdm(total=args.epochs * len(train_loader), desc="# training") as p_bar:
+    p_bar = None
+    if not args.quiet:
+        p_bar = tqdm(total=args.epochs * len(train_loader), desc="# training")
+    try:
+        eval_interval = max(1, args.epochs // 10)
         for epoch in range(args.epochs):
             agg   = 0.0
             agg_r = 0
@@ -77,16 +81,25 @@ def train_epoch(args, train_set, device):
                 agg   += loss.item()
                 agg_r += r.item()
                 agg_m += m.item()
-                p_bar.update(1)
-                p_bar.set_description(
-                    "# Epoch: %3d Time: %.3f Loss: %.4f  r: %.4f m: %.4f"
-                    % (
-                        epoch,
-                        time.time() - start_time,
-                        agg / (idx + 1),
-                        agg_r / (idx + 1),
-                        agg_m / (idx + 1),
+                if p_bar is not None:
+                    p_bar.update(1)
+                    p_bar.set_description(
+                        "# Epoch: %3d Time: %.3f Loss: %.4f  r: %.4f m: %.4f"
+                        % (
+                            epoch,
+                            time.time() - start_time,
+                            agg / (idx + 1),
+                            agg_r / (idx + 1),
+                            agg_m / (idx + 1),
+                        )
                     )
-                )
+
+            should_eval = eval_fn is not None and ((epoch + 1) % eval_interval == 0 or (epoch + 1) == args.epochs)
+            if should_eval:
+                print("# Evaluation after epoch {}/{}".format(epoch + 1, args.epochs))
+                eval_fn(model, epoch + 1)
+    finally:
+        if p_bar is not None:
+            p_bar.close()
 
     return model

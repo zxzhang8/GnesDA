@@ -10,7 +10,8 @@ class TripletNet(nn.Module):
         self.device = device
 
     def forward(self, x):
-        # x1 / x2 / x3:
+        # x1     / x2  / x3
+        # anchor / pos / neg:
         #   protein: [B, C, M]
         #   traj:    [B, M, 2]
         x1, x2, x3 = x

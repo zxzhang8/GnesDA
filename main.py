@@ -3,6 +3,7 @@ import time
 import tqdm
 import pickle
 import json
+import math
 import argparse
 import shutil
 import numpy as np
@@ -17,7 +18,7 @@ from distance.dist_computation import all_pair_distance
 from utils.sequence_store import CombinedSequenceStore, open_split_store
 
 
-def get_knn(dist):
+def get_knn(dist, quiet=False):
     """对真实距离矩阵逐行排序，得到每个样本的近邻索引。
 
     参数:
@@ -27,19 +28,22 @@ def get_knn(dist):
         knn: [num_query, num_base]，每一行是按距离升序排序后的 base 下标。
     """
     knn = np.empty(dtype=np.int32, shape=(len(dist), len(dist[0])))
-    for i in tqdm.tqdm(range(len(dist)), desc="# sorting for KNN indices"):
+    iterator = range(len(dist))
+    if not quiet:
+        iterator = tqdm.tqdm(iterator, desc="# sorting for KNN indices")
+    for i in iterator:
         knn[i, :] = np.argsort(dist[i, :])
     return knn
 
 
-def get_dist_knn(dist_type, queries, base=None, data_type=None):
+def get_dist_knn(dist_type, queries, base=None, data_type=None, quiet=False):
     """计算两组序列的全对距离与对应的近邻排序。"""
     if base is None:
         base = queries
 
-    dist = all_pair_distance(queries, base, cpu_count(), dist_type, data_type=data_type)
+    dist = all_pair_distance(queries, base, cpu_count(), dist_type, data_type=data_type, progress=not quiet)
 
-    return dist, get_knn(dist)
+    return dist, get_knn(dist, quiet=quiet)
 
 
 def load_dataset_metadata(dataset):
@@ -317,12 +321,14 @@ class DataHandler:
                 self.args.dist_type,
                 [self.lines[i] for i in self.train_ids],
                 data_type=self.data_type,
+                quiet=self.args.quiet,
             )
             self.query_dist, self.query_knn = get_dist_knn(
                 self.args.dist_type,
                 [self.lines[i] for i in self.query_ids],
                 [self.lines[i] for i in self.base_ids],
                 data_type=self.data_type,
+                quiet=self.args.quiet,
             )
             return
 
@@ -375,11 +381,14 @@ class DataHandler:
         base_chunk_size,
         desc_prefix,
     ):
-        for query_start, query_chunk in tqdm.tqdm(
-            iter_store_chunks(self.sequence_store, query_indices, query_chunk_size),
-            total=(len(query_indices) + query_chunk_size - 1) // query_chunk_size,
-            desc=f"# {desc_prefix} distance chunks",
-        ):
+        iterator = iter_store_chunks(self.sequence_store, query_indices, query_chunk_size)
+        if not self.args.quiet:
+            iterator = tqdm.tqdm(
+                iterator,
+                total=(len(query_indices) + query_chunk_size - 1) // query_chunk_size,
+                desc=f"# {desc_prefix} distance chunks",
+            )
+        for query_start, query_chunk in iterator:
             query_stop = query_start + len(query_chunk)
             for base_start, base_chunk in iter_store_chunks(self.sequence_store, base_indices, base_chunk_size):
                 block = all_pair_distance(
@@ -459,7 +468,7 @@ class DataHandler:
         if nb < len(self.base_ids):
             self.base_ids = self.base_ids[:nb]
             self.query_dist = self.query_dist[:, :nb]
-            self.query_knn = get_knn(self.query_dist)
+            self.query_knn = get_knn(self.query_dist, quiet=self.args.quiet)
             if getattr(self.xb, "sample_indices", None) is not None:
                 self.xb.sample_indices = self.xb.sample_indices[:nb]
             else:
@@ -487,7 +496,7 @@ def get_args():
     parser.add_argument("--nt",                  type=int, default=1000, help="training samples")
     parser.add_argument("--nq",                  type=int, default=1000, help="query items")
     parser.add_argument("--nb",                  type=int, default=5000000, help="base items")
-    parser.add_argument("--sample-size",         type=int, default=0, help="optional unified sample count for train/query/base")
+    parser.add_argument("--sample-size",         type=int, default=0, help="optional train sample count; query/base use ceil(sample-size * 0.25)")
     parser.add_argument("--k",                   type=int, default=200, help="sampling threshold")
     parser.add_argument("--maxl",                type=int, default=0, help="max length of strings")
 
@@ -507,6 +516,7 @@ def get_args():
     parser.add_argument("--recall",              action="store_true", default=True, help="print recall")
     parser.add_argument("--distance-correlation", action="store_true", default=True, help="print embedding/edit-distance correlation")
     parser.add_argument("--no-cuda",             action="store_true", default=False, help="disables GPU training")
+    parser.add_argument("--quiet",               action="store_true", default=False, help="disable tqdm progress bars")
 
     parser.add_argument("--train-fasta",         type=str, default="", help="optional training FASTA for DNA")
     parser.add_argument("--eval-fasta",          type=str, default="", help="optional eval FASTA for DNA; split into query/base")
@@ -561,19 +571,20 @@ def get_args():
 
     if args.sample_size:
         args.nt = args.sample_size
-        args.nq = args.sample_size
-        args.nb = args.sample_size
+        eval_sample_size = math.ceil(args.sample_size * 0.25)
+        args.nq = eval_sample_size
+        args.nb = eval_sample_size
 
         if metadata is not None:
             total_items = metadata["train_size"] + metadata["query_size"] + metadata["base_size"]
         else:
             total_items = get_dataset_item_count(args.dataset, args.data_type)
-        required_items = args.sample_size * 3
+        required_items = args.nt + args.nq + args.nb
         if total_items < required_items:
             raise ValueError(
                 "Dataset '{}' contains {} sequences, but --sample-size {} requires at least {} "
-                "(train/query/base each need that many).".format(
-                    args.dataset, total_items, args.sample_size, required_items
+                "(train={}, query={}, base={}).".format(
+                    args.dataset, total_items, args.sample_size, required_items, args.nt, args.nq, args.nb
                 )
             )
 

@@ -26,12 +26,16 @@ def _batch_embed(args, net, vecs: StringDataset, device):
     )
     net.eval()
     embedding = []
-    with tqdm.tqdm(total=len(test_loader), desc="# batch embedding") as p_bar:
-        for i, x in enumerate(test_loader):
-            p_bar.update(1)
-            # net(x) 输出:
-            #   [B, C, T]
+    if args.quiet:
+        for x in test_loader:
             embedding.append(net(x.to(device)).cpu().data.numpy())
+    else:
+        with tqdm.tqdm(total=len(test_loader), desc="# batch embedding") as p_bar:
+            for i, x in enumerate(test_loader):
+                p_bar.update(1)
+                # net(x) 输出:
+                #   [B, C, T]
+                embedding.append(net(x.to(device)).cpu().data.numpy())
     return np.concatenate(embedding, axis=0)
 
 
@@ -43,12 +47,23 @@ def GnesDA_embedding(args, h, data_file):
         device = torch.device("cpu")
     train_loader = TripletString(h.xt, h.nt, h.train_knn, h.train_dist, K=args.k)
 
+    def periodic_eval(model, epoch):
+        model.eval()
+        with torch.no_grad():
+            xb = _batch_embed(args, model.embedding_net, h.xb, device)
+            xq = _batch_embed(args, model.embedding_net, h.xq, device)
+        if args.recall:
+            test_recall(xb, xq, h.query_knn, h.query_dist, h.C)
+        if args.distance_correlation:
+            test_distance_correlation(xb, xq, h.query_dist, h.C)
+        model.train()
+
     model_file = "{}/model.torch".format(data_file)
     if os.path.isfile(model_file):
         model = torch.load(model_file, weights_only=False)
     else:
         start_time = time.time()
-        model = train_epoch(args, train_loader, device)
+        model = train_epoch(args, train_loader, device, eval_fn=periodic_eval)
         if args.save_model:
             torch.save(model, model_file)
         train_time = time.time() - start_time
