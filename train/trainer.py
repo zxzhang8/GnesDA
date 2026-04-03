@@ -97,7 +97,7 @@ def train_epoch(args, train_set, device, eval_fn=None):
 
             if args.quiet:
                 sys.stderr.write(
-                    "# Epoch: %3d Time: %.3f Loss: %.4f  r: %.4f m: %.4f"
+                    "# Epoch: %3d Time: %.3f Loss: %.4f  r: %.4f m: %.4f\n"
                     % (
                         epoch,
                         time.time() - start_time,
