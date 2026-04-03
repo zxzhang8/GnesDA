@@ -49,7 +49,7 @@ def train_epoch(args, train_set, device, eval_fn=None):
     if not args.quiet:
         p_bar = tqdm(total=args.epochs * len(train_loader), desc="# training")
     try:
-        eval_interval = max(1, args.epochs // 10)
+        eval_interval = min(max(1, args.epochs // 10), 50)
         for epoch in range(args.epochs):
             agg   = 0.0
             agg_r = 0
