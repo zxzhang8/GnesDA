@@ -32,11 +32,11 @@ class TripletLoss(nn.Module):
         self.l, self.r = 1, 1
         step = args.epochs // 5
         self.Ls = {
-            step * 0: (0, 10),
+            step * 0: (10, 0),
             step * 1: (10, 10),
-            step * 2: (10, 1),
-            step * 3: (5, 0.1),
-            step * 4: (1, 0.01),
+            step * 2: (1, 10),
+            step * 3: (0.1, 5),
+            step * 4: (0.01, 1),
         }
 
     def dist(self, ins, pos):
