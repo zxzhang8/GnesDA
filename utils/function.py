@@ -87,24 +87,31 @@ def _pearson_corr(x, y):
     return float(np.sum(x_centered * y_centered) / denom)
 
 
-def distance_correlation_metrics(X, Q, G, embed_channel):
+def distance_correlation_metrics(X, Q, G, embed_channel, avg_dist=1.0):
     pred = embedding_distance(Q, X, embed_channel)
     truth = G.astype(np.float64)
+    pred_edit = pred.astype(np.float64) * float(avg_dist)
 
-    pred_flat = pred.reshape(-1)
+    pred_flat = pred_edit.reshape(-1)
     truth_flat = truth.reshape(-1)
+    diff_flat = pred_flat - truth_flat
+    abs_diff_flat = np.abs(diff_flat)
 
     pearson = _pearson_corr(pred_flat, truth_flat)
     spearman = _pearson_corr(_average_rank(pred_flat), _average_rank(truth_flat))
-    mae = float(np.mean(np.abs(pred_flat - truth_flat)))
-    rmse = float(np.sqrt(np.mean((pred_flat - truth_flat) ** 2)))
+    mae = float(np.mean(abs_diff_flat))
+    rmse = float(np.sqrt(np.mean(diff_flat ** 2)))
+    avg_diff = float(np.mean(abs_diff_flat))
+    max_diff = float(np.max(abs_diff_flat))
 
     return {
         "pearson": pearson,
         "spearman": spearman,
         "mae": mae,
         "rmse": rmse,
-        "pred_dist": pred,
+        "avg_diff": avg_diff,
+        "max_diff": max_diff,
+        "pred_dist": pred_edit,
     }
 
 
@@ -177,13 +184,15 @@ def test_recall(X, Q, knn, G, embed_channel):
     # print()
 
 
-def test_distance_correlation(X, Q, G, embed_channel):
-    metrics = distance_correlation_metrics(X, Q, G, embed_channel)
+def test_distance_correlation(X, Q, G, embed_channel, avg_dist=1.0):
+    metrics = distance_correlation_metrics(X, Q, G, embed_channel, avg_dist=avg_dist)
     print("# Distance Correlation")
     print("pearson\t{:.6f}".format(metrics["pearson"]))
     print("spearman\t{:.6f}".format(metrics["spearman"]))
     print("mae\t{:.6f}".format(metrics["mae"]))
     print("rmse\t{:.6f}".format(metrics["rmse"]))
+    print("avg_diff\t{:.6f}".format(metrics["avg_diff"]))
+    print("max_diff\t{:.6f}".format(metrics["max_diff"]))
     return metrics
 
 

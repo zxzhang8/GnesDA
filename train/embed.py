@@ -55,7 +55,7 @@ def GnesDA_embedding(args, h, data_file):
         if args.recall:
             test_recall(xb, xq, h.query_knn, h.query_dist, h.C)
         if args.distance_correlation:
-            test_distance_correlation(xb, xq, h.query_dist, h.C)
+            test_distance_correlation(xb, xq, h.query_dist, h.C, avg_dist=train_loader.avg_dist)
         model.train()
 
     model_file = "{}/model.torch".format(data_file)
@@ -88,7 +88,7 @@ def GnesDA_embedding(args, h, data_file):
     if args.recall:
         test_recall(xb, xq, h.query_knn, h.query_dist, h.C)
     if args.distance_correlation:
-        metrics = test_distance_correlation(xb, xq, h.query_dist, h.C)
+        metrics = test_distance_correlation(xb, xq, h.query_dist, h.C, avg_dist=train_loader.avg_dist)
         if args.save_embed:
             np.save("{}/{}embedding_query_base_distance".format(data_file, args.embed_dir), metrics["pred_dist"])
             with open("{}/{}distance_metrics.json".format(data_file, args.embed_dir), "w", encoding="utf-8") as handle:
@@ -98,6 +98,8 @@ def GnesDA_embedding(args, h, data_file):
                         "spearman": metrics["spearman"],
                         "mae": metrics["mae"],
                         "rmse": metrics["rmse"],
+                        "avg_diff": metrics["avg_diff"],
+                        "max_diff": metrics["max_diff"],
                     },
                     handle,
                     indent=2,
