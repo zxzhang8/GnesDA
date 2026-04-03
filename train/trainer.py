@@ -1,5 +1,6 @@
 import time
 import torch
+import sys
 from tqdm import tqdm
 from torch.utils import data
 from torch.optim import lr_scheduler
@@ -38,11 +39,11 @@ def train_epoch(args, train_set, device, eval_fn=None):
     model.train()
 
     optimizer = torch.optim.Adam(model.parameters(), lr=args.learning_rate)
-    scheduler = lr_scheduler.OneCycleLR(optimizer=optimizer,
-                                        steps_per_epoch=train_steps,
-                                        pct_start=0.3,
-                                        epochs=args.epochs,
-                                        max_lr=args.learning_rate)
+    # scheduler = lr_scheduler.OneCycleLR(optimizer=optimizer,
+    #                                     steps_per_epoch=train_steps,
+    #                                     pct_start=0.3,
+    #                                     epochs=args.epochs,
+    #                                     max_lr=args.learning_rate)
 
     p_bar = None
     if not args.quiet:
@@ -93,6 +94,18 @@ def train_epoch(args, train_set, device, eval_fn=None):
                             agg_m / (idx + 1),
                         )
                     )
+
+            if args.quiet:
+                sys.stderr.write(
+                    "# Epoch: %3d Time: %.3f Loss: %.4f  r: %.4f m: %.4f"
+                    % (
+                        epoch,
+                        time.time() - start_time,
+                        agg / (idx + 1),
+                        agg_r / (idx + 1),
+                        agg_m / (idx + 1),
+                    )
+                )
 
             should_eval = eval_fn is not None and ((epoch + 1) % eval_interval == 0 or (epoch + 1) == args.epochs)
             if should_eval:

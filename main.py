@@ -505,7 +505,7 @@ def get_args():
     parser.add_argument("--batch-size",          type=int, default=32, help="batch size for train")
     parser.add_argument("--test-batch-size",     type=int, default=32, help="batch size for test")
     parser.add_argument("--num-workers",         type=int, default=0, help="dataloader workers for train/test")
-    parser.add_argument("--channel",             type=int, default=8, help="channels of cnn")
+    # parser.add_argument("--channel",             type=int, default=8, help="channels of cnn")
     parser.add_argument("--embed-len",           type=int, default=128, help="output length")
     parser.add_argument("--embed-channel",       type=int, default=32, help="output channel of trajectory dataset")
     parser.add_argument("--learning_rate",       type=float, default=0.001, help="learning rate")
