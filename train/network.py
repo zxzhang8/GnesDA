@@ -15,9 +15,9 @@ class TripletNet(nn.Module):
         #   protein: [B, C, M]
         #   traj:    [B, M, 2]
         x1, x2, x3 = x
-        return self.embedding_net(x1.to(self.device)), \
-            self.embedding_net(x2.to(self.device)), \
-            self.embedding_net(x3.to(self.device))
+        return torch.nn.functional.normalize(self.embedding_net(x1.to(self.device)), dim=-1), \
+            torch.nn.functional.normalize(self.embedding_net(x2.to(self.device)), dim=-1), \
+            torch.nn.functional.normalize(self.embedding_net(x3.to(self.device)), dim=-1)
 
 
 class TripletLoss(nn.Module):
@@ -33,10 +33,10 @@ class TripletLoss(nn.Module):
         step = args.epochs // 5
         self.Ls = {
             step * 0: (0, 10),
-            step * 1: (10, 10),
-            step * 2: (10, 10),
-            step * 3: (5, 10),
-            step * 4: (0.01, 10),
+            step * 1: (0, 10),
+            step * 2: (0, 10),
+            step * 3: (0, 10),
+            step * 4: (0, 10),
         }
 
     def dist(self, ins, pos):
@@ -46,7 +46,7 @@ class TripletLoss(nn.Module):
         if len(ins.shape) == 2:
             return torch.norm(ins - pos, dim=1)
         else:
-            return torch.sum(torch.norm(ins - pos, dim=-1), dim=-1)
+            return torch.mean(torch.norm(ins - pos, dim=-1), dim=-1)
 
     def forward(self, x, dists, epoch):
         if epoch in self.Ls:
